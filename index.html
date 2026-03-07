@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Track Race</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:,">
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-5KB9EJ4VX2"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); gtag('config', 'G-5KB9EJ4VX2');
+  </script>
+  <script>
+    const fpPromise = import('https://fpjscdn.net/v3/UZdGObt4WgWHDR1uCb9O').then(FingerprintJS => FingerprintJS.load());
+    fpPromise.then(fp => fp.get()).then(result => {
+      window.visitorId = result.visitorId;
+      if (typeof initializeHighScores === 'function') { initializeHighScores(); }
+      else { document.addEventListener('DOMContentLoaded', () => { if (typeof initializeHighScores === 'function') initializeHighScores(); }); }
+    }).catch(() => { window.visitorId = 'fallback_' + Date.now() + '_' + Math.random().toString(36).substr(2,9); });
+  </script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script>window.SUPABASE_URL='https://pbghclvypsddddimxmxu.supabase.co'; window.SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBiZ2hjbHZ5cHNkZGRkaW14bXh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAwODQxMDUsImV4cCI6MjA3NTY2MDEwNX0.LHmml1ISFot98yPw_4zmzPy6xaefjKeNUfqOWW_B6wg';</script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="css/game.css">
+</head>
+<body class="bg-[#cde7ec] antialiased" style="font-family: 'Press Start 2P', cursive;">
+  <div id="game-container" class="relative w-full min-h-screen max-w-[1500px] mx-auto flex flex-col items-center justify-start p-2 md:p-3">
+    <div id="top-bar" class="w-full flex justify-between items-center gap-3 p-2 bg-[#273f43] rounded-t-lg text-white shadow-lg">
+      <div id="top-bar-actions" class="flex items-center gap-2">
+        <button id="back-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Back</button>
+        <button id="scores-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">🏆 Best Times</button>
+        <button id="change-character-header-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Change Character</button>
+      </div>
+      <div id="hud-center" class="shrink-0">
+        <div id="timer" class="text-sm sm:text-lg md:text-2xl font-mono">00:00:000</div>
+        <div id="stamina-wrap" aria-live="polite">
+          <span id="stamina-label">Stamina</span>
+          <div id="stamina-bar" role="progressbar" aria-label="Player stamina" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
+            <div id="stamina-fill" class="stamina-high" style="width:100%"></div>
+          </div>
+          <span id="stamina-value">100%</span>
+        </div>
+      </div>
+      <div class="text-right shrink-0">
+        <div class="text-xs sm:text-sm uppercase">Turbo</div>
+        <div id="turbo-status" class="text-sm sm:text-base md:text-xl font-bold text-green-400">READY</div>
+      </div>
+    </div>
+    <div id="character-modal" class="absolute inset-0 bg-black/75 flex flex-col items-center justify-center z-50 text-center p-4">
+      <h1 class="text-2xl sm:text-4xl md:text-5xl font-bold text-yellow-300 mb-6 text-center" style="text-shadow: 3px 3px #000;">Choose Your Racer!</h1>
+      <div id="character-grid" class="grid grid-cols-3 gap-4 mb-6 max-w-lg">
+        <button class="character-btn bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="blue-racer">
+          <div class="text-3xl mb-2">🏃‍♂️</div>
+          <div class="text-xs sm:text-sm font-bold">Blue Racer</div>
+        </button>
+        <button class="character-btn bg-red-600 hover:bg-red-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="red-racer">
+          <div class="text-3xl mb-2">🏃‍♀️</div>
+          <div class="text-xs sm:text-sm font-bold">Red Racer</div>
+        </button>
+        <button class="character-btn bg-amber-600 hover:bg-amber-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="capybara">
+          <div class="text-3xl mb-2">🦫</div>
+          <div class="text-xs sm:text-sm font-bold">Capybara</div>
+        </button>
+        <button class="character-btn bg-purple-600 hover:bg-purple-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="dragon">
+          <div class="mb-2 flex items-center justify-center" style="height: 48px;">
+            <div style="width: 64px; height: 64px; background-image: url('./assets/images/sprites/dragon-flying-mess.png'); background-size: 512px 64px; background-position: 0px 0px; background-repeat: no-repeat; transform: scale(0.75);"></div>
+          </div>
+          <div class="text-xs sm:text-sm font-bold">Dragon</div>
+        </button>
+        <button class="character-btn bg-gray-600 hover:bg-gray-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="gorilla">
+          <div class="mb-2 flex items-center justify-center" style="height: 48px;">
+            <div style="width: 64px; height: 64px; background-image: url('./assets/images/sprites/gorilla-sprite-sheet-final.png'); background-size: 128px 896px; background-position: 0px 0px; background-repeat: no-repeat; transform: scale(0.75);"></div>
+          </div>
+          <div class="text-xs sm:text-sm font-bold">Gorilla</div>
+        </button>
+        <button class="character-btn bg-green-600 hover:bg-green-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="dinosaur">
+          <div class="mb-2 flex items-center justify-center" style="height: 48px;">
+            <div style="width: 64px; height: 64px; background-image: url('./assets/images/sprites/dinosaur-dash-sprite.png'); background-size: 192px 192px; background-position: 0px 0px; background-repeat: no-repeat; transform: scale(0.75);"></div>
+          </div>
+          <div class="text-xs sm:text-sm font-bold">Dinosaur</div>
+        </button>
+        <button class="character-btn bg-orange-600 hover:bg-orange-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="dog">
+          <div class="mb-2 flex items-center justify-center" style="height: 48px;">
+            <div style="width: 64px; height: 64px; background-image: url('./assets/images/sprites/dog-sprite-sheet.png'); background-size: 256px 128px; background-position: 0px 0px; background-repeat: no-repeat; transform: scale(0.75);"></div>
+          </div>
+          <div class="text-xs sm:text-sm font-bold">Dog</div>
+        </button>
+        <button class="character-btn bg-pink-600 hover:bg-pink-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="cat">
+          <div class="mb-2 flex items-center justify-center" style="height: 48px;">
+            <div style="width: 64px; height: 64px; background-image: url('./assets/images/sprites/cat-run-sprite-sheet.png'); background-size: 192px 128px; background-position: 0px 0px; background-repeat: no-repeat; transform: scale(0.75);"></div>
+          </div>
+          <div class="text-xs sm:text-sm font-bold">Cat</div>
+        </button>
+        <button class="character-btn bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="cow">
+          <div class="text-3xl mb-2">🐄</div>
+          <div class="text-xs sm:text-sm font-bold">Cow</div>
+        </button>
+        <button class="character-btn bg-gradient-to-br from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="mystery">
+          <div class="text-3xl mb-2">❓</div>
+          <div class="text-xs sm:text-sm font-bold">Mystery</div>
+        </button>
+      </div>
+      <p class="text-white text-sm mb-2 opacity-80">Select your character to race!</p>
+    </div>
+
+    <div id="game-modal" class="absolute inset-0 bg-black/72 flex items-end sm:items-center justify-center z-40 text-center hidden">
+      <div id="game-modal-sheet" class="w-full sm:max-w-2xl bg-[#20373b]/96 text-white rounded-t-[24px] sm:rounded-2xl border-t-4 sm:border-4 border-[#273f43] shadow-2xl px-4 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:p-5">
+        <div id="modal-actions-top" class="flex items-center justify-between gap-2 mb-3">
+          <button id="back-to-menu-button" class="px-3 py-2 text-[10px] sm:text-xs bg-gray-600 text-white font-bold rounded hover:bg-gray-700 transition-all hidden">Back</button>
+          <div class="flex-1"></div>
+          <button id="change-character-btn" class="px-3 py-2 text-[10px] sm:text-xs bg-gray-600 text-white font-bold rounded hover:bg-gray-700 transition-all">Change Character</button>
+        </div>
+        <div id="modal-body" class="min-h-0">
+          <h1 id="modal-title" class="text-xl sm:text-4xl md:text-5xl font-bold text-yellow-300 mb-3 text-center" style="text-shadow: 3px 3px #000;">Track Race</h1>
+          <div id="versus-preview" class="hidden">
+            <div class="text-center">
+              <div id="player-preview" class="mb-2 flex items-center justify-center" style="height: 48px;"></div>
+              <div class="text-white text-xs sm:text-sm">You</div>
+            </div>
+            <div class="text-xl sm:text-2xl text-white">VS</div>
+            <div class="text-center">
+              <div id="computer-preview" class="mb-2 flex items-center justify-center" style="height: 48px;"></div>
+              <div class="text-white text-xs sm:text-sm">Computer</div>
+            </div>
+          </div>
+          <p id="modal-text" class="text-sm sm:text-lg text-white mb-3 text-center px-2 opacity-90">Ready to race?</p>
+          <div id="race-perk-wrap" class="mt-2 mb-2 flex flex-col items-center gap-2">
+            <div class="text-[10px] sm:text-xs text-slate-200 uppercase tracking-wide">Race Perk</div>
+            <div id="race-perk-picker" class="w-full max-w-md grid grid-cols-2 gap-2">
+              <button type="button" class="race-perk-btn px-2 py-2 text-[10px] sm:text-xs font-bold rounded bg-slate-600 text-slate-100" data-perk="speed">+Speed</button>
+              <button type="button" class="race-perk-btn px-2 py-2 text-[10px] sm:text-xs font-bold rounded bg-slate-600 text-slate-100" data-perk="turbo">Turbo 4s CD</button>
+            </div>
+          </div>
+          <div id="race-time-display" class="text-base sm:text-xl text-yellow-300 font-bold mt-2 hidden">
+            Time: <span id="final-race-time">00:00:000</span>
+          </div>
+          <div id="modal-results-stack" class="mt-3 flex flex-col gap-3 hidden">
+            <div id="podium-results" class="w-full"></div>
+            <div id="results-best-scores" class="w-full bg-white/92 rounded-xl shadow p-3 text-left"></div>
+          </div>
+          <div id="controls-hint" class="mt-3 text-[10px] sm:text-xs text-gray-300">Touch buttons or use SPACE/G keys</div>
+        </div>
+        <div id="modal-footer" class="mt-4 flex items-center gap-2 justify-center">
+          <button id="start-button" class="px-4 py-3 text-xs sm:text-sm font-bold rounded bg-yellow-300 text-black">Start Race</button>
+          <button id="change-character-footer-btn" class="px-4 py-3 text-xs sm:text-sm font-bold rounded bg-slate-600 text-white">Change Character</button>
+        </div>
+      </div>
+    </div>
+    
+      <div id="track-area" class="relative w-full min-h-[280px] h-[64vh] max-h-[620px] bg-[#6ea17f] border-4 border-[#273f43] rounded-b-lg overflow-hidden shadow-inner mt-2">
+        <div id="track-world" class="absolute inset-0">
+          <div id="crowd-area">
+            <div id="crowd-sprite" class="crowd-sprite" aria-label="Cheering crowd"></div>
+          </div>
+          <div id="track-oval"></div>
+          <div id="lane-divider"></div>
+          <div id="infield"></div>
+          <div id="finish-line"></div>
+          <div id="player" class="runner absolute" style="width: 64px; height: 64px;"></div>
+          <div id="computer" class="runner absolute" style="width: 64px; height: 64px;"></div>
+        </div>
+      </div>
+      <div id="mobile-controls" class="w-full flex items-center justify-center gap-3 mt-3">
+        <button id="btn-run" class="px-4 py-3 text-sm font-bold rounded bg-blue-500 text-white">Run</button>
+        <button id="btn-turbo" class="px-4 py-3 text-sm font-bold rounded bg-green-500 text-white">Turbo</button>
+      </div>
+  </div>
+  <div id="highscores-modal" class="absolute inset-0 bg-black/30 flex flex-col items-center justify-center z-50 text-center p-4 hidden">
+    <h2 id="modal-scores-title" class="text-xl sm:text-3xl font-bold text-yellow-300 mb-3" style="text-shadow: 2px 2px #000;">🌍 Global Best Times</h2>
+    <div id="modal-scores-content" class="bg-white rounded-lg shadow p-3 w-full max-w-md"></div>
+    <div class="flex gap-2 mt-3">
+      <button id="modal-toggle-scores" class="px-3 py-1 text-xs sm:text-sm font-bold rounded bg-blue-500 text-white">📊 My Best Times</button>
+      <button id="modal-close" class="px-3 py-1 text-xs sm:text-sm font-bold rounded bg-gray-600 text-white">Close</button>
+    </div>
+  </div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
