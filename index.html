@@ -32,6 +32,7 @@
       <div id="top-bar-actions" class="flex items-center gap-2">
         <button id="back-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Back</button>
         <button id="scores-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">🏆 Best Times</button>
+        <button id="change-event-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Change Event</button>
         <button id="change-character-header-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Change Character</button>
       </div>
       <div id="hud-center" class="shrink-0">
@@ -45,11 +46,27 @@
         </div>
       </div>
       <div class="text-right shrink-0">
-        <div class="text-xs sm:text-sm uppercase">Turbo</div>
+        <div id="secondary-action-label" class="text-xs sm:text-sm uppercase">Turbo</div>
         <div id="turbo-status" class="text-sm sm:text-base md:text-xl font-bold text-green-400">READY</div>
       </div>
     </div>
-    <div id="character-modal" class="absolute inset-0 bg-black/75 flex flex-col items-center justify-center z-50 text-center p-4">
+    <div id="event-modal" class="absolute inset-0 bg-black/75 flex flex-col items-center justify-center z-[60] text-center p-4">
+      <div class="w-full max-w-2xl rounded-2xl border-4 border-[#273f43] bg-[#20373b]/95 px-5 py-6 shadow-2xl">
+        <h1 class="text-2xl sm:text-4xl md:text-5xl font-bold text-yellow-300 mb-4 text-center" style="text-shadow: 3px 3px #000;">Choose Event</h1>
+        <p class="text-white text-xs sm:text-sm mb-5 opacity-85">Pick your race, then choose a character.</p>
+        <div id="event-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <button class="event-btn rounded-xl border-2 border-[#7aa8b0] bg-[#294b50] px-4 py-5 text-left text-white transition-all hover:border-yellow-300" data-event="dash">
+            <div class="text-sm sm:text-base font-bold text-yellow-300 mb-2">400m Dash</div>
+            <div class="text-[10px] sm:text-xs leading-relaxed opacity-85">Classic one-lap sprint with stamina, turbo, and race perks.</div>
+          </button>
+          <button class="event-btn rounded-xl border-2 border-[#7aa8b0] bg-[#294b50] px-4 py-5 text-left text-white transition-all hover:border-yellow-300" data-event="hurdles">
+            <div class="text-sm sm:text-base font-bold text-yellow-300 mb-2">400m Hurdles</div>
+            <div class="text-[10px] sm:text-xs leading-relaxed opacity-85">Ten hurdles over one lap. Turbo becomes jump, and timing matters.</div>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div id="character-modal" class="absolute inset-0 bg-black/75 flex flex-col items-center justify-center z-50 text-center p-4 hidden">
       <h1 class="text-2xl sm:text-4xl md:text-5xl font-bold text-yellow-300 mb-6 text-center" style="text-shadow: 3px 3px #000;">Choose Your Racer!</h1>
       <div id="character-grid" class="grid grid-cols-3 gap-4 mb-6 max-w-lg">
         <button class="character-btn bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-lg border-2 border-transparent hover:border-yellow-300 transition-all" data-char="blue-racer">
@@ -159,6 +176,7 @@
           <div id="lane-divider"></div>
           <div id="infield"></div>
           <div id="finish-line"></div>
+          <div id="hurdle-layer"></div>
           <div id="player" class="runner absolute" style="width: 64px; height: 64px;"></div>
           <div id="computer" class="runner absolute" style="width: 64px; height: 64px;"></div>
         </div>

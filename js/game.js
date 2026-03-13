@@ -1,7 +1,8 @@
 import { TURBO_DURATION, TURBO_COOLDOWN, TRACK_DISTANCE_UNITS } from './config.js';
 import { getSpeedMultiplier, TURBO_BOOST_AMOUNT } from './speed.js';
-import { updateTimer, updateTurboUI, updateStaminaUI } from './ui.js';
+import { setSecondaryActionType, updateJumpUI, updateTimer, updateTurboUI, updateStaminaUI } from './ui.js';
 import { characters, updateRunnerAppearance } from './characters.js';
+import { DEFAULT_EVENT_ID, EVENT_DASH, EVENT_HURDLES, getRaceEventMeta, normalizeEventId } from './events.js';
 
 const LANE_COUNT = 6;
 const PLAYER_LANE_INDEX = 2;
@@ -36,8 +37,24 @@ const STAMINA_CURVE_POINTS = [
 const FAST_TURBO_COOLDOWN_MS = 4000;
 const SPEED_PERK_ACCEL_MULT = 1.06;
 const SPEED_PERK_MAX_MULT = 1.05;
+const HURDLE_METERS = [45, 80, 115, 150, 185, 220, 255, 290, 325, 360];
+const HURDLE_CLEAR_WINDOW_METERS = 2.8;
+const HURDLE_LATE_WINDOW_METERS = 1.2;
+const JUMP_DURATION_MS = 560;
+const JUMP_VISUAL_HEIGHT = 22;
+const HURDLE_HIT_MS = 620;
+const HURDLE_HIT_SPEED_FACTOR = 0.56;
+const AI_JUMP_LOOKAHEAD_BASE = 1.05;
+const AI_JUMP_LOOKAHEAD_SPEED_FACTOR = 0.05;
+const AI_JUMP_MISS_CHANCE = 0.09;
+const HURDLE_FATIGUE_PENALTY = 0.028;
+const HURDLES_FINISH_BASELINE_STAMINA = 0.9;
+const HURDLES_MAX_EXTRA_FATIGUE = 0.3;
+const HURDLES_RECOVERY_START_METERS = 18;
+const HURDLES_RECOVERY_MULT = 4.4;
+const HURDLES_RHYTHM_RECOVERY_PER_TAP = 0.0016;
 
-
+let currentEvent = DEFAULT_EVENT_ID;
 let isGameRunning=false; let isGameOver=false; let startTime=0;
 let playerPos=0; let playerSpeed=0;
 let isTurboReady=true;
@@ -45,6 +62,10 @@ let runInputActive=false;
 let playerTurboUntil=0;
 let playerRacePerk='speed';
 let playerTurboCooldownMs=TURBO_COOLDOWN;
+let playerJumpUntil=0;
+let playerHurdleHitUntil=0;
+let playerNextHurdleIndex=0;
+let playerFinishTimeMs=null;
 
 let cpuHasStarted=false;
 let aiRunners=[];
@@ -60,6 +81,7 @@ let playerTapCadenceDecay=RUN_PULSE_DECAY_PER_SECOND;
 let playerTapBonusSpeed=0; let playerCoastSpeed=1.35;
 let cpuAccelRate=14; let cpuCruiseSpeed=8.9; let cpuMaxSpeed=10.6;
 let turboPeakBonus=3.4;
+let playerTurboCooldownIntervalId=0;
 
 let lastTime=0; let accumulator=0; const STEP=1/60;
 
@@ -80,10 +102,38 @@ function moveTowards(current, target, maxDelta){
   if(current < target){ return Math.min(current + maxDelta, target); }
   return Math.max(current - maxDelta, target);
 }
+function resetTimerDisplay(){
+  const timer = document.getElementById('timer');
+  if(timer){ timer.textContent = '00:00:000'; }
+}
+function clearPlayerTurboCooldownInterval(){
+  if(playerTurboCooldownIntervalId){
+    clearInterval(playerTurboCooldownIntervalId);
+    playerTurboCooldownIntervalId = 0;
+  }
+}
 
 export function setPlayerRacePerk(perk){
   playerRacePerk = (perk === 'turbo') ? 'turbo' : 'speed';
   playerTurboCooldownMs = playerRacePerk === 'turbo' ? FAST_TURBO_COOLDOWN_MS : TURBO_COOLDOWN;
+}
+
+export function setRaceEvent(eventId){
+  currentEvent = normalizeEventId(eventId);
+  const meta = getRaceEventMeta(currentEvent);
+  setSecondaryActionType(meta.secondaryActionType);
+}
+
+export function getCurrentEvent(){
+  return currentEvent;
+}
+
+export function isRaceActive(){
+  return isGameRunning && !isGameOver;
+}
+
+function isHurdlesEvent(){
+  return currentEvent === EVENT_HURDLES;
 }
 
 function configureRaceTuning(){
@@ -95,11 +145,11 @@ function configureRaceTuning(){
   playerTapBonusSpeed = 0;
   playerCoastSpeed = 1.35 * mult;
 
-  if(playerRacePerk === 'speed'){
+  if(currentEvent === EVENT_DASH && playerRacePerk === 'speed'){
     playerAccelRate *= SPEED_PERK_ACCEL_MULT;
     playerMaxSpeed *= SPEED_PERK_MAX_MULT;
   }
-  playerTurboCooldownMs = playerRacePerk === 'turbo' ? FAST_TURBO_COOLDOWN_MS : TURBO_COOLDOWN;
+  playerTurboCooldownMs = (currentEvent === EVENT_DASH && playerRacePerk === 'turbo') ? FAST_TURBO_COOLDOWN_MS : TURBO_COOLDOWN;
 
   cpuAccelRate = 17.2 * mult;
   cpuCruiseSpeed = 1.35 * mult;
@@ -131,6 +181,11 @@ function createAiRunnerState(id, laneIndex){
     lastTapAt: 0,
     tapCadence: 0,
     nextTapAt: 0,
+    jumpUntil: 0,
+    hurdleHitUntil: 0,
+    nextHurdleIndex: 0,
+    jumpAttemptedForHurdle: -1,
+    finishTimeMs: null,
     style: 'steady',
     styleVariance: 0
   };
@@ -152,6 +207,11 @@ function assignAiProfiles(){
     ai.turboReady = true;
     ai.turboUntil = 0;
     ai.turboLastUsed = 0;
+    ai.jumpUntil = 0;
+    ai.hurdleHitUntil = 0;
+    ai.nextHurdleIndex = 0;
+    ai.jumpAttemptedForHurdle = -1;
+    ai.finishTimeMs = null;
   }
 }
 
@@ -162,7 +222,8 @@ function getTrackNodes(){
   const divider = document.getElementById('lane-divider');
   const infield = document.getElementById('infield');
   const finish = document.getElementById('finish-line');
-  return { area, world, oval, divider, infield, finish };
+  const hurdleLayer = document.getElementById('hurdle-layer');
+  return { area, world, oval, divider, infield, finish, hurdleLayer };
 }
 
 function ensureExtraRunners(){
@@ -209,6 +270,84 @@ function ensureLaneDividers(){
     }
   }
   return trackGeom.dividerEls;
+}
+
+function laneRaceSpanUnits(laneIndex){
+  return Math.max(1, getLapUnits() - getStartOffsetUnits(laneIndex));
+}
+
+function laneUnitsFromMeters(meters, laneIndex){
+  return (clamp(meters, 0, 400) / 400) * laneRaceSpanUnits(laneIndex);
+}
+
+function laneProgressUnitsFromMeters(meters, laneIndex){
+  return getStartOffsetUnits(laneIndex) + laneUnitsFromMeters(meters, laneIndex);
+}
+
+function ensureHurdleEls(){
+  const { hurdleLayer } = getTrackNodes();
+  if(!hurdleLayer) return [];
+
+  if(currentEvent !== EVENT_HURDLES){
+    hurdleLayer.innerHTML = '';
+    trackGeom.hurdleEls = [];
+    return [];
+  }
+
+  const total = LANE_COUNT * HURDLE_METERS.length;
+  if(!Array.isArray(trackGeom.hurdleEls) || trackGeom.hurdleEls.length !== total){
+    hurdleLayer.innerHTML = '';
+    trackGeom.hurdleEls = [];
+    for(let laneIndex = 0; laneIndex < LANE_COUNT; laneIndex++){
+      for(let hurdleIndex = 0; hurdleIndex < HURDLE_METERS.length; hurdleIndex++){
+        const el = document.createElement('div');
+        el.className = 'track-hurdle';
+        const leftStand = document.createElement('span');
+        leftStand.className = 'hurdle-stand hurdle-stand-left';
+        const rightStand = document.createElement('span');
+        rightStand.className = 'hurdle-stand hurdle-stand-right';
+        const bar = document.createElement('span');
+        bar.className = 'hurdle-bar';
+        el.appendChild(leftStand);
+        el.appendChild(rightStand);
+        el.appendChild(bar);
+        hurdleLayer.appendChild(el);
+        trackGeom.hurdleEls.push(el);
+      }
+    }
+  }
+
+  return trackGeom.hurdleEls;
+}
+
+function renderHurdles(){
+  const { hurdleLayer } = getTrackNodes();
+  if(!hurdleLayer) return;
+
+  if(currentEvent !== EVENT_HURDLES){
+    hurdleLayer.innerHTML = '';
+    trackGeom.hurdleEls = [];
+    return;
+  }
+
+  const hurdleEls = ensureHurdleEls();
+  const laneWidth = trackGeom.laneWidth || 44;
+  let idx = 0;
+  for(let laneIndex = 0; laneIndex < LANE_COUNT; laneIndex++){
+    for(const hurdleMeters of HURDLE_METERS){
+      const el = hurdleEls[idx++];
+      if(!el) continue;
+      const point = getPointOnTrack(laneProgressUnitsFromMeters(hurdleMeters, laneIndex), laneIndex);
+      const angle = (Math.atan2(point.dy, point.dx) * 180 / Math.PI) + 90;
+      const hurdleWidth = Math.max(28, Math.round(laneWidth * 0.78));
+      const hurdleHeight = Math.max(18, Math.round(laneWidth * 0.5));
+      el.style.left = `${Math.round(point.x)}px`;
+      el.style.top = `${Math.round(point.y)}px`;
+      el.style.width = `${hurdleWidth}px`;
+      el.style.height = `${hurdleHeight}px`;
+      el.style.transform = `translate(-50%, -50%) rotate(${Math.round(angle)}deg)`;
+    }
+  }
 }
 
 function randomCharacterKey(){
@@ -328,6 +467,8 @@ function computeTrackGeometry(){
       marker.style.transform = `translate(-50%, -50%) rotate(${Math.round(angle)}deg)`;
     }
   }
+
+  renderHurdles();
 }
 
 function laneMetrics(laneIndex){
@@ -391,11 +532,17 @@ function getPointOnTrack(units, laneIndex){
   return { x: leftCx + s, y: cy - m.r, dx: 1, dy: 0, segment: 'home-straight' };
 }
 
-function placeRunner(el, units, laneIndex){
+function getJumpArcOffset(nowMs, jumpUntil){
+  if(nowMs >= jumpUntil){ return 0; }
+  const progress = 1 - ((jumpUntil - nowMs) / JUMP_DURATION_MS);
+  return -Math.sin(clamp(progress, 0, 1) * Math.PI) * JUMP_VISUAL_HEIGHT;
+}
+
+function placeRunner(el, units, laneIndex, verticalOffset=0){
   if(!el) return;
   const p = getPointOnTrack(units, laneIndex);
   const x = Math.round(p.x - RUNNER_HALF_SIZE);
-  const y = Math.round(p.y - RUNNER_HALF_SIZE);
+  const y = Math.round(p.y - RUNNER_HALF_SIZE + verticalOffset);
   el.style.setProperty('--runner-flip', p.dx >= 0 ? '1' : '-1');
   const heading = (Math.atan2(p.dy, p.dx) * 180) / Math.PI;
   el.style.setProperty('--shadow-rot', `${Math.round(heading * 0.35)}deg`);
@@ -438,25 +585,47 @@ function getTurboBonus(nowMs, turboUntil){
 function updateRunnerAnimationState(nowMs){
   const playerEl=document.getElementById('player');
   const playerMoving=(playerSpeed + getTurboBonus(nowMs, playerTurboUntil)) > 0.7;
-  if(playerEl){ playerEl.classList.toggle('running', playerMoving); }
+  if(playerEl){
+    playerEl.classList.toggle('running', playerMoving);
+    playerEl.classList.toggle('jumping', nowMs < playerJumpUntil);
+    playerEl.classList.toggle('hurdle-hit', nowMs < playerHurdleHitUntil);
+  }
 
   for(const ai of aiRunners){
     const el = document.getElementById(ai.id);
     if(!el) continue;
     const moving = cpuHasStarted && (ai.speed + getTurboBonus(nowMs, ai.turboUntil)) > 0.7;
     el.classList.toggle('running', moving);
+    el.classList.toggle('jumping', nowMs < ai.jumpUntil);
+    el.classList.toggle('hurdle-hit', nowMs < ai.hurdleHitUntil);
   }
 }
 
 function renderScene(nowMs){
   const playerEl=document.getElementById('player');
-  placeRunner(playerEl, playerPos, PLAYER_LANE_INDEX);
+  placeRunner(playerEl, playerPos, PLAYER_LANE_INDEX, getJumpArcOffset(nowMs, playerJumpUntil));
   for(const ai of aiRunners){
     const el = document.getElementById(ai.id);
-    placeRunner(el, ai.pos, ai.laneIndex);
+    placeRunner(el, ai.pos, ai.laneIndex, getJumpArcOffset(nowMs, ai.jumpUntil));
   }
   updateRunnerAnimationState(nowMs);
   updateCamera();
+}
+
+function registerFinishTimes(nowMs){
+  if(!startTime || startTime <= 0){ return; }
+  const elapsedMs = Math.max(0, Math.floor(nowMs - startTime));
+  const lapUnits = getLapUnits();
+
+  if(playerFinishTimeMs == null && playerPos >= lapUnits){
+    playerFinishTimeMs = elapsedMs;
+  }
+
+  for(const ai of aiRunners){
+    if(ai.finishTimeMs == null && ai.pos >= lapUnits){
+      ai.finishTimeMs = elapsedMs;
+    }
+  }
 }
 
 function removeBananaPeel(){ const banana=document.getElementById('banana-peel'); if(banana&&banana.parentNode) banana.parentNode.removeChild(banana); }
@@ -505,6 +674,10 @@ function applyStaggeredStarts(){
   playerRunBoostUntil = 0;
   lastRunTapAt = 0;
   playerTapCadence = 0;
+  playerJumpUntil = 0;
+  playerHurdleHitUntil = 0;
+  playerNextHurdleIndex = 0;
+  playerFinishTimeMs = null;
   for(const ai of aiRunners){
     ai.startOffset = getStartOffsetUnits(ai.laneIndex);
     ai.pos = ai.startOffset;
@@ -521,6 +694,11 @@ function applyStaggeredStarts(){
     ai.lastTapAt = 0;
     ai.tapCadence = 0;
     ai.nextTapAt = 0;
+    ai.jumpUntil = 0;
+    ai.hurdleHitUntil = 0;
+    ai.nextHurdleIndex = 0;
+    ai.jumpAttemptedForHurdle = -1;
+    ai.finishTimeMs = null;
   }
 }
 
@@ -537,24 +715,79 @@ function getRunnerMeta(id){
   return { id, name: characterName, characterKey, isPlayer: false };
 }
 
+function compareStandingsEntries(a, b){
+  const aFinished = Number.isFinite(a.finishTimeMs);
+  const bFinished = Number.isFinite(b.finishTimeMs);
+  if(aFinished && bFinished){
+    if(a.finishTimeMs !== b.finishTimeMs){
+      return a.finishTimeMs - b.finishTimeMs;
+    }
+    return b.pos - a.pos;
+  }
+  if(aFinished !== bFinished){
+    return aFinished ? -1 : 1;
+  }
+  return b.pos - a.pos;
+}
+
 function buildStandings(){
-  const standings = [{ id: 'player', laneIndex: PLAYER_LANE_INDEX, pos: playerPos }]
-    .concat(aiRunners.map(ai => ({ id: ai.id, laneIndex: ai.laneIndex, pos: ai.pos })));
-  standings.sort((a, b) => b.pos - a.pos);
+  const standings = [{
+    id: 'player',
+    laneIndex: PLAYER_LANE_INDEX,
+    pos: playerPos,
+    finishTimeMs: playerFinishTimeMs
+  }].concat(aiRunners.map(ai => ({
+    id: ai.id,
+    laneIndex: ai.laneIndex,
+    pos: ai.pos,
+    finishTimeMs: ai.finishTimeMs
+  })));
+  standings.sort(compareStandingsEntries);
   return standings.map((entry, index) => ({
     place: index + 1,
     pos: entry.pos,
     laneIndex: entry.laneIndex,
+    finishTimeMs: entry.finishTimeMs,
     ...getRunnerMeta(entry.id)
   }));
 }
 
+function resetRunnerVisualStates(){
+  const playerEl = document.getElementById('player');
+  if(playerEl){
+    playerEl.classList.remove('turbo-effect');
+    playerEl.classList.remove('jumping');
+    playerEl.classList.remove('hurdle-hit');
+  }
+  for(const ai of aiRunners){
+    const el = document.getElementById(ai.id);
+    if(!el) continue;
+    el.classList.remove('turbo-effect');
+    el.classList.remove('slipped');
+    el.classList.remove('jumping');
+    el.classList.remove('hurdle-hit');
+  }
+}
+
 export function initializeTrackView(){
+  setRaceEvent(currentEvent);
   ensureExtraRunners();
   resetAiStates();
   randomizeExtraRacerLooks();
+  clearPlayerTurboCooldownInterval();
+  bananaUsed = false;
+  bananaActive = false;
+  bananaPosition = -1;
+  removeBananaPeel();
   applyStaggeredStarts();
+  resetRunnerVisualStates();
+  resetTimerDisplay();
   updateStaminaUI(playerStamina);
+  if(isHurdlesEvent()){
+    updateJumpUI('ready');
+  } else {
+    updateTurboUI(true, 0);
+  }
   resetWorldView();
 }
 
@@ -563,6 +796,7 @@ export function startGame(){
   ensureExtraRunners();
   resetAiStates();
   randomizeExtraRacerLooks();
+  clearPlayerTurboCooldownInterval();
 
   isGameOver=false;
   isGameRunning=true;
@@ -576,6 +810,9 @@ export function startGame(){
   playerRunBoostUntil=0;
   lastRunTapAt=0;
   playerTapCadence=0;
+  playerJumpUntil=0;
+  playerHurdleHitUntil=0;
+  playerNextHurdleIndex=0;
   cpuHasStarted=false;
 
   startTime=0;
@@ -585,17 +822,16 @@ export function startGame(){
   lastTime=performance.now();
   accumulator=0;
   removeBananaPeel();
-  updateTurboUI(true,0);
+  if(isHurdlesEvent()){
+    updateJumpUI('ready');
+  } else {
+    updateTurboUI(true,0);
+  }
   updateStaminaUI(playerStamina);
 
   applyStaggeredStarts();
 
-  const playerEl=document.getElementById('player');
-  if(playerEl) playerEl.classList.remove('turbo-effect');
-  for(const ai of aiRunners){
-    const el=document.getElementById(ai.id);
-    if(el){ el.classList.remove('turbo-effect'); el.classList.remove('slipped'); }
-  }
+  resetRunnerVisualStates();
 
   resetWorldView();
 
@@ -617,15 +853,16 @@ function gameLoop(){
 
   updateTimer(startTime);
   updateStaminaUI(playerStamina);
+  if(isHurdlesEvent()){
+    const playerActionState = now < playerHurdleHitUntil ? 'hit' : (now < playerJumpUntil ? 'air' : 'ready');
+    updateJumpUI(playerActionState);
+  }
   renderScene(now);
 
-  const lap=getLapUnits();
-  const bestAiPos = aiRunners.reduce((m, ai) => Math.max(m, ai.pos), 0);
-  const playerFin=playerPos>=lap;
-  const aiFin=bestAiPos>=lap;
-  if(playerFin||aiFin){
-    const winner=(playerPos>=bestAiPos)?'player':'cpu';
-    endGame(winner, winner==='player');
+  if(playerFinishTimeMs != null){
+    const standings = buildStandings();
+    const winner = standings[0]?.isPlayer ? 'player' : 'cpu';
+    endGame(winner, true);
     return;
   }
 
@@ -633,6 +870,7 @@ function gameLoop(){
 }
 
 function maybeTriggerAiTurbo(ai, nowMs){
+  if(isHurdlesEvent()) return;
   if(ai.slipped) return;
   if(!ai.turboReady) return;
   const meters = metersFromUnits(ai.pos);
@@ -654,6 +892,98 @@ function lerp(a, b, t){
 
 function metersFromUnits(units){
   return clamp(units / getLapUnits(), 0, 1) * 400;
+}
+
+function metersFromLaneProgress(units, laneIndex){
+  const startOffset = getStartOffsetUnits(laneIndex);
+  const span = laneRaceSpanUnits(laneIndex);
+  return clamp((units - startOffset) / span, 0, 1) * 400;
+}
+
+function hurdleWindowUnits(meters, laneIndex){
+  return laneUnitsFromMeters(meters, laneIndex);
+}
+
+function getNextHurdleUnits(laneIndex, hurdleIndex){
+  if(hurdleIndex < 0 || hurdleIndex >= HURDLE_METERS.length){ return null; }
+  return laneProgressUnitsFromMeters(HURDLE_METERS[hurdleIndex], laneIndex);
+}
+
+function markHurdleHit(runnerId){
+  const el = document.getElementById(runnerId);
+  if(el){ el.classList.add('hurdle-hit'); }
+}
+
+function activatePlayerJump(nowMs){
+  if(nowMs < playerJumpUntil) return;
+  playerJumpUntil = nowMs + JUMP_DURATION_MS;
+  updateJumpUI('air');
+}
+
+function activateAiJump(ai, nowMs){
+  if(nowMs < ai.jumpUntil) return;
+  ai.jumpUntil = nowMs + JUMP_DURATION_MS;
+}
+
+function handlePlayerHurdles(nowMs){
+  if(!isHurdlesEvent()) return;
+  const hurdleUnits = getNextHurdleUnits(PLAYER_LANE_INDEX, playerNextHurdleIndex);
+  if(hurdleUnits == null) return;
+
+  const earlyWindow = hurdleWindowUnits(HURDLE_CLEAR_WINDOW_METERS, PLAYER_LANE_INDEX);
+  const lateWindow = hurdleWindowUnits(HURDLE_LATE_WINDOW_METERS, PLAYER_LANE_INDEX);
+  if(playerPos < hurdleUnits - earlyWindow){ return; }
+
+  if(playerPos <= hurdleUnits + lateWindow && nowMs < playerJumpUntil){
+    playerNextHurdleIndex++;
+    return;
+  }
+
+  playerHurdleHitUntil = nowMs + HURDLE_HIT_MS;
+  playerSpeed *= HURDLE_HIT_SPEED_FACTOR;
+  playerExtraFatigue = clamp(playerExtraFatigue + HURDLE_FATIGUE_PENALTY, 0, 1);
+  playerNextHurdleIndex++;
+  markHurdleHit('player');
+  updateJumpUI('hit');
+}
+
+function maybeHandleAiJump(ai, nowMs){
+  if(!isHurdlesEvent()) return;
+  const hurdleUnits = getNextHurdleUnits(ai.laneIndex, ai.nextHurdleIndex);
+  if(hurdleUnits == null) return;
+  if(ai.jumpAttemptedForHurdle === ai.nextHurdleIndex){ return; }
+
+  const distanceToHurdle = hurdleUnits - ai.pos;
+  const lookAhead = clamp(AI_JUMP_LOOKAHEAD_BASE + ai.speed * AI_JUMP_LOOKAHEAD_SPEED_FACTOR, 0.9, 1.65);
+  if(distanceToHurdle > lookAhead){ return; }
+
+  ai.jumpAttemptedForHurdle = ai.nextHurdleIndex;
+  if(Math.random() > AI_JUMP_MISS_CHANCE){
+    activateAiJump(ai, nowMs);
+  }
+}
+
+function handleAiHurdles(ai, nowMs){
+  if(!isHurdlesEvent()) return;
+  const hurdleUnits = getNextHurdleUnits(ai.laneIndex, ai.nextHurdleIndex);
+  if(hurdleUnits == null) return;
+
+  const earlyWindow = hurdleWindowUnits(HURDLE_CLEAR_WINDOW_METERS, ai.laneIndex);
+  const lateWindow = hurdleWindowUnits(HURDLE_LATE_WINDOW_METERS, ai.laneIndex);
+  if(ai.pos < hurdleUnits - earlyWindow){ return; }
+
+  if(ai.pos <= hurdleUnits + lateWindow && nowMs < ai.jumpUntil){
+    ai.nextHurdleIndex++;
+    ai.jumpAttemptedForHurdle = -1;
+    return;
+  }
+
+  ai.hurdleHitUntil = nowMs + HURDLE_HIT_MS;
+  ai.speed *= HURDLE_HIT_SPEED_FACTOR;
+  ai.extraFatigue = clamp(ai.extraFatigue + HURDLE_FATIGUE_PENALTY, 0, 1);
+  ai.nextHurdleIndex++;
+  ai.jumpAttemptedForHurdle = -1;
+  markHurdleHit(ai.id);
 }
 
 function getBaselineStaminaFromMeters(meters){
@@ -701,29 +1031,53 @@ function getStaminaSpeedFactor(stamina){
 }
 
 function getFatigueCapByMeters(meters){
+  if(isHurdlesEvent()){
+    const progress = clamp(meters / 400, 0, 1);
+    return lerp(0.04, HURDLES_MAX_EXTRA_FATIGUE, Math.pow(progress, 0.86));
+  }
   const progress = clamp(meters / 400, 0, 1);
   return lerp(0.02, MAX_EXTRA_FATIGUE, Math.pow(progress, 0.92));
 }
 
+function getRhythmFit(cadence){
+  const cadenceCenter = isHurdlesEvent() ? 0.66 : 0.6;
+  const cadenceHalfWidth = isHurdlesEvent() ? 0.18 : 0.2;
+  return clamp(1 - Math.abs(cadence - cadenceCenter) / cadenceHalfWidth, 0, 1);
+}
+
+function getTapFatigueGain(cadence){
+  const baseGain = RUN_TAP_STAMINA_COST * TAP_FATIGUE_SCALE * (0.7 + cadence * 0.6);
+  if(!isHurdlesEvent()){ return baseGain; }
+  const rhythmFit = getRhythmFit(cadence);
+  return baseGain * lerp(1.05, 0.4, rhythmFit);
+}
+
+function getTapRecoveryBonus(cadence){
+  if(!isHurdlesEvent()){ return 0; }
+  return HURDLES_RHYTHM_RECOVERY_PER_TAP * getRhythmFit(cadence);
+}
+
 function applySteadyPaceRecovery(extraFatigue, currentSpeed, phaseTarget, cadence, meters, dt){
-  if(meters < 70 || phaseTarget <= 0){ return extraFatigue; }
+  const recoveryStartMeters = isHurdlesEvent() ? HURDLES_RECOVERY_START_METERS : 70;
+  if(meters < recoveryStartMeters || phaseTarget <= 0){ return extraFatigue; }
 
   const paceRatio = clamp(currentSpeed / phaseTarget, 0, 1.2);
-  const paceCenter = 0.8;
-  const paceHalfWidth = 0.16;
+  const paceCenter = isHurdlesEvent() ? 0.84 : 0.8;
+  const paceHalfWidth = isHurdlesEvent() ? 0.24 : 0.16;
   const paceFit = clamp(1 - Math.abs(paceRatio - paceCenter) / paceHalfWidth, 0, 1);
 
-  const cadenceCenter = 0.6;
-  const cadenceHalfWidth = 0.2;
-  const cadenceFit = clamp(1 - Math.abs(cadence - cadenceCenter) / cadenceHalfWidth, 0, 1);
+  const cadenceFit = getRhythmFit(cadence);
 
-  const lastCornerFactor = meters < 280 ? 1 : lerp(1, 1.35, (meters - 280) / 120);
-  const recovery = STEADY_RECOVERY_PER_SECOND * paceFit * cadenceFit * lastCornerFactor * dt;
+  const lastCornerFactor = isHurdlesEvent() ? 1 : (meters < 280 ? 1 : lerp(1, 1.35, (meters - 280) / 120));
+  const recoveryMult = isHurdlesEvent() ? HURDLES_RECOVERY_MULT : 1;
+  const recovery = STEADY_RECOVERY_PER_SECOND * recoveryMult * paceFit * cadenceFit * lastCornerFactor * dt;
   return clamp(extraFatigue - recovery, 0, 1);
 }
 
 function computeEffectiveStamina(meters, extraFatigue, secondWindBoost){
-  const base = getBaselineStaminaFromMeters(meters);
+  const base = isHurdlesEvent()
+    ? lerp(1, HURDLES_FINISH_BASELINE_STAMINA, clamp(meters / 400, 0, 1))
+    : getBaselineStaminaFromMeters(meters);
   const fatigueCap = getFatigueCapByMeters(meters);
   const fatigue = clamp(extraFatigue, 0, fatigueCap);
   return clamp(base - fatigue + clamp(secondWindBoost, 0, 1), 0, 1);
@@ -749,8 +1103,9 @@ function registerRunTap(nowMs){
   const tapImpulse = (playerAccelRate * (0.38 + playerTapCadence * 0.85)) * STEP * 2.0;
   playerSpeed = clamp(playerSpeed + tapImpulse, 0, staminaLimitedMax);
 
-  const playerFatigueGain = RUN_TAP_STAMINA_COST * TAP_FATIGUE_SCALE * (0.7 + playerTapCadence * 0.6);
-  playerExtraFatigue = clamp(playerExtraFatigue + playerFatigueGain, 0, 1);
+  const playerFatigueGain = getTapFatigueGain(playerTapCadence);
+  const playerRecoveryBonus = getTapRecoveryBonus(playerTapCadence);
+  playerExtraFatigue = clamp(playerExtraFatigue + playerFatigueGain - playerRecoveryBonus, 0, 1);
   playerStamina = computeEffectiveStamina(meters, playerExtraFatigue, playerSecondWindBoost);
 }
 
@@ -767,8 +1122,9 @@ function registerAiRunTap(ai, nowMs){
   const tapImpulse = (cpuAccelRate * (0.38 + ai.tapCadence * 0.85)) * STEP * 2.0;
   ai.speed = clamp(ai.speed + tapImpulse, 0, staminaLimitedMax);
 
-  const aiFatigueGain = RUN_TAP_STAMINA_COST * TAP_FATIGUE_SCALE * (0.7 + ai.tapCadence * 0.6);
-  ai.extraFatigue = clamp(ai.extraFatigue + aiFatigueGain, 0, 1);
+  const aiFatigueGain = getTapFatigueGain(ai.tapCadence);
+  const aiRecoveryBonus = getTapRecoveryBonus(ai.tapCadence);
+  ai.extraFatigue = clamp(ai.extraFatigue + aiFatigueGain - aiRecoveryBonus, 0, 1);
   ai.stamina = computeEffectiveStamina(meters, ai.extraFatigue, ai.secondWindBoost);
 }
 
@@ -806,10 +1162,12 @@ function step(dt, nowMs){
   playerStamina = computeEffectiveStamina(playerMeters, playerExtraFatigue, playerSecondWindBoost);
   const playerSpeedCap = playerMaxSpeed * getStaminaSpeedFactor(playerStamina);
   playerSpeed = clamp(playerSpeed, 0, playerSpeedCap);
+  if(nowMs < playerHurdleHitUntil){ playerSpeed *= HURDLE_HIT_SPEED_FACTOR; }
 
   const lapUnits = getLapUnits();
-  const playerTurboBonus = getTurboBonus(nowMs, playerTurboUntil);
+  const playerTurboBonus = isHurdlesEvent() ? 0 : getTurboBonus(nowMs, playerTurboUntil);
   playerPos = clamp(playerPos + (playerSpeed + playerTurboBonus) * dt, 0, lapUnits);
+  handlePlayerHurdles(nowMs);
 
   if(cpuHasStarted){
     for(const ai of aiRunners){
@@ -822,6 +1180,7 @@ function step(dt, nowMs){
         registerAiRunTap(ai, nowMs);
         scheduleAiNextTap(ai, nowMs);
       }
+      maybeHandleAiJump(ai, nowMs);
 
       const aiBoostActive = nowMs < ai.runBoostUntil;
       const aiPhaseTarget = cpuMaxSpeed * getRaceSpeedFactorFromMeters(aiMeters);
@@ -841,9 +1200,11 @@ function step(dt, nowMs){
       ai.stamina = computeEffectiveStamina(aiMeters, ai.extraFatigue, ai.secondWindBoost);
       const aiSpeedCap = cpuMaxSpeed * getStaminaSpeedFactor(ai.stamina);
       ai.speed = clamp(ai.speed, 0, aiSpeedCap);
+      if(nowMs < ai.hurdleHitUntil){ ai.speed *= HURDLE_HIT_SPEED_FACTOR; }
 
-      const turboBonus = getTurboBonus(nowMs, ai.turboUntil);
+      const turboBonus = isHurdlesEvent() ? 0 : getTurboBonus(nowMs, ai.turboUntil);
       ai.pos = clamp(ai.pos + (ai.speed + turboBonus) * dt, 0, lapUnits);
+      handleAiHurdles(ai, nowMs);
 
       maybeTriggerAiTurbo(ai, nowMs);
 
@@ -855,7 +1216,7 @@ function step(dt, nowMs){
     }
   }
 
-  if(cpuHasStarted && bananaActive){
+  if(cpuHasStarted && bananaActive && currentEvent === EVENT_DASH){
     const hitter = aiRunners.find(ai => Math.abs(ai.pos - bananaPosition) <= 2.2 && !ai.slipped);
     if(hitter){
       hitter.slipped = true;
@@ -866,6 +1227,8 @@ function step(dt, nowMs){
       removeBananaPeel();
     }
   }
+
+  registerFinishTimes(nowMs);
 }
 
 export function endGame(winner, playerFinished){
@@ -873,8 +1236,11 @@ export function endGame(winner, playerFinished){
   isGameOver=true;
   runInputActive=false;
   playerRunBoostUntil=0;
+  clearPlayerTurboCooldownInterval();
   if(animationFrameId){ cancelAnimationFrame(animationFrameId); animationFrameId=0; }
-  const ms=Math.max(0, Math.floor(performance.now()-startTime));
+  const ms=(playerFinishTimeMs != null)
+    ? playerFinishTimeMs
+    : Math.max(0, Math.floor(performance.now()-startTime));
   const standings = buildStandings();
   const ev=new CustomEvent('raceFinished', {
     detail:{
@@ -885,6 +1251,24 @@ export function endGame(winner, playerFinished){
     }
   });
   document.dispatchEvent(ev);
+}
+
+export function cancelRace(){
+  isGameRunning = false;
+  isGameOver = false;
+  cpuHasStarted = false;
+  runInputActive = false;
+  startTime = 0;
+  playerSpeed = 0;
+  playerTurboUntil = 0;
+  playerRunBoostUntil = 0;
+  playerJumpUntil = 0;
+  playerHurdleHitUntil = 0;
+  playerNextHurdleIndex = 0;
+  isTurboReady = true;
+  clearPlayerTurboCooldownInterval();
+  if(animationFrameId){ cancelAnimationFrame(animationFrameId); animationFrameId = 0; }
+  initializeTrackView();
 }
 
 function startComputerIfNeeded(){
@@ -914,6 +1298,7 @@ export function onRunPress(){
 export function onRunRelease(){ runInputActive=false; }
 
 export function activateTurbo(){
+  if(isHurdlesEvent()) return;
   if(isGameOver) return;
   if(!isGameRunning){
     if(window.gameReady===true){ startGame(); }
@@ -933,18 +1318,40 @@ export function activateTurbo(){
   setTimeout(()=>{ const el=document.getElementById('player'); if(el) el.classList.remove('turbo-effect'); }, TURBO_DURATION);
 
   let cooldownTime=playerTurboCooldownMs/1000;
-  const cooldownInterval=setInterval(()=>{
+  clearPlayerTurboCooldownInterval();
+  playerTurboCooldownIntervalId=setInterval(()=>{
     cooldownTime--;
     updateTurboUI(false, Math.max(0,cooldownTime));
     if(cooldownTime<=0){
-      clearInterval(cooldownInterval);
+      clearPlayerTurboCooldownInterval();
       isTurboReady=true;
       updateTurboUI(true,0);
     }
   },1000);
 }
 
+export function activateJump(){
+  if(!isHurdlesEvent()) return;
+  if(isGameOver) return;
+  if(!isGameRunning){
+    if(window.gameReady===true){ startGame(); }
+    else { return; }
+  }
+  startTimerIfNeeded();
+  startComputerIfNeeded();
+  activatePlayerJump(performance.now());
+}
+
+export function triggerSecondaryAction(){
+  if(isHurdlesEvent()){
+    activateJump();
+    return;
+  }
+  activateTurbo();
+}
+
 export function throwBananaPeel(){
+  if(currentEvent !== EVENT_DASH) return;
   if(bananaUsed||isGameOver||!isGameRunning) return;
   bananaUsed=true;
   bananaActive=true;

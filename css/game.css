@@ -98,11 +98,25 @@ button {
 
 .turbo-effect { filter: drop-shadow(0 0 8px #fef08a); transition: filter 0.2s ease-in-out; }
 .slipped { animation: slipPulse 0.45s ease-in-out infinite; filter: blur(1px); }
+.runner.jumping .shadow {
+  opacity: 0.1 !important;
+  transform: translateX(-50%) rotate(var(--shadow-rot, 0deg)) scaleX(0.68) !important;
+}
+
+.runner.hurdle-hit {
+  animation: hurdleHitFlash 0.22s linear 2;
+}
 
 @keyframes slipPulse {
   0% { filter: blur(0.6px) brightness(1); }
   50% { filter: blur(1.4px) brightness(1.08); }
   100% { filter: blur(0.6px) brightness(1); }
+}
+
+@keyframes hurdleHitFlash {
+  0% { filter: brightness(1); }
+  50% { filter: brightness(1.2) saturate(0.9); }
+  100% { filter: brightness(1); }
 }
 
 @keyframes spriteRun {
@@ -267,6 +281,16 @@ button {
 @media (min-width: 1024px) { .crowd-frame-text { font-size: 14px; } }
 
 .character-btn.selected { outline: 3px solid #fde047; outline-offset: 2px; transform: scale(1.03); }
+.event-btn.is-selected {
+  border-color: #fde047 !important;
+  box-shadow: 0 0 0 2px rgba(253, 224, 71, 0.3);
+  transform: translateY(-1px);
+}
+
+#event-modal {
+  backdrop-filter: blur(2px);
+}
+
 #character-modal { backdrop-filter: blur(2px); overflow: auto; padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); }
 #character-modal .modal-content { border: 3px solid #273f43; }
 #character-grid { width: min(100%, 34rem); }
@@ -288,6 +312,44 @@ button {
 #lane-divider { position: absolute; inset: 0; pointer-events: none; z-index: 14; }
 #infield { position: absolute; z-index: 12; border-radius: 999px; background: radial-gradient(circle at 45% 40%, #8ac196 0%, #72a77d 70%, #628f6c 100%); border: 5px solid rgba(255,255,255,0.22); box-shadow: inset 0 12px 22px rgba(255,255,255,0.1); }
 #finish-line { position: absolute; transform: translateX(-50%); width: 16px; z-index: 16; border: 2px solid #111; border-radius: 4px; background-image: repeating-linear-gradient(0deg, #fff, #fff 6px, #111 6px, #111 12px); box-shadow: 0 0 10px rgba(0,0,0,0.2); }
+#hurdle-layer { position: absolute; inset: 0; z-index: 17; pointer-events: none; }
+.track-hurdle {
+  position: absolute;
+  transform-origin: 50% 50%;
+}
+
+.track-hurdle .hurdle-stand,
+.track-hurdle .hurdle-bar {
+  position: absolute;
+  display: block;
+}
+
+.track-hurdle .hurdle-stand {
+  width: 2px;
+  bottom: 2px;
+  height: 68%;
+  background: #111827;
+  border-radius: 999px;
+}
+
+.track-hurdle .hurdle-stand-left {
+  left: 22%;
+}
+
+.track-hurdle .hurdle-stand-right {
+  right: 22%;
+}
+
+.track-hurdle .hurdle-bar {
+  left: 10%;
+  right: 10%;
+  top: 0;
+  height: 5px;
+  background: #f8fafc;
+  border: 2px solid #111827;
+  border-radius: 999px;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.14);
+}
 
 #mobile-controls {
   width: 100%;
@@ -299,8 +361,9 @@ button {
 }
 
 #mobile-controls button {
-  min-width: 132px;
-  min-height: 58px;
+  min-width: 112px;
+  min-height: 78px;
+  padding: 0.85rem 0.95rem;
   font-size: 1rem;
   touch-action: manipulation;
   transition: transform 70ms ease, filter 70ms ease, box-shadow 70ms ease;
@@ -384,9 +447,9 @@ button {
   }
 
   #mobile-controls button {
-    min-width: 124px;
-    min-height: 56px;
-    padding: 0.9rem 1.1rem;
+    min-width: 108px;
+    min-height: 88px;
+    padding: 1rem 0.95rem;
   }
 }
 
@@ -419,7 +482,9 @@ button {
   }
 
   #mobile-controls button {
-    min-width: 44vw;
+    min-width: 41vw;
+    min-height: 92px;
+    padding: 1rem 0.85rem;
     font-size: 0.95rem;
   }
 }
@@ -459,8 +524,9 @@ button {
   }
 
   #mobile-controls button {
-    min-width: 118px;
-    min-height: 50px;
+    min-width: 100px;
+    min-height: 72px;
+    padding: 0.85rem 0.8rem;
     font-size: 0.9rem;
   }
 }

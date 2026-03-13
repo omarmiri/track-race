@@ -1,26 +1,44 @@
-import { onRunPress, onRunRelease, activateTurbo, throwBananaPeel } from './game.js';
+import { getRaceEventMeta } from './events.js';
+import { getCurrentEvent, onRunPress, onRunRelease, triggerSecondaryAction, throwBananaPeel } from './game.js';
+
+function getControlsHintText(gamepad=false){
+  const meta = getRaceEventMeta(getCurrentEvent());
+  return gamepad ? meta.gamepadHint : meta.controlsHint;
+}
+
+export function refreshControlsHint(gamepad=false){
+  const hint = document.getElementById('controls-hint');
+  if(hint){
+    hint.textContent = getControlsHintText(gamepad);
+  }
+}
 
 export function wireKeyboard(){
-  window.addEventListener('keydown',(e)=>{
-    const cm=document.getElementById('character-modal');
-    const gm=document.getElementById('game-modal');
-    const inModal=(cm && !cm.classList.contains('hidden')) || (gm && !gm.classList.contains('hidden'));
-    if(e.code==='Space'){
+  window.addEventListener('keydown', (e)=>{
+    const cm = document.getElementById('character-modal');
+    const gm = document.getElementById('game-modal');
+    const em = document.getElementById('event-modal');
+    const inModal = (cm && !cm.classList.contains('hidden')) ||
+      (gm && !gm.classList.contains('hidden')) ||
+      (em && !em.classList.contains('hidden'));
+
+    if(e.code === 'Space'){
       if(e.repeat){ return; }
       e.preventDefault();
       if(!inModal) onRunPress();
     }
-    if(e.code==='KeyG'){
+    if(e.code === 'KeyG'){
       e.preventDefault();
-      if(!inModal) activateTurbo();
+      if(!inModal) triggerSecondaryAction();
     }
-    if(e.code==='KeyB'){
+    if(e.code === 'KeyB'){
       e.preventDefault();
       if(!inModal) throwBananaPeel();
     }
   });
-  window.addEventListener('keyup',(e)=>{
-    if(e.code==='Space'){
+
+  window.addEventListener('keyup', (e)=>{
+    if(e.code === 'Space'){
       e.preventDefault();
       onRunRelease();
     }
@@ -30,7 +48,10 @@ export function wireKeyboard(){
 export function wireTouch(){
   const trackArea = document.getElementById('track-area');
   if(trackArea){
-    const block = (e)=>{ e.preventDefault(); e.stopPropagation(); };
+    const block = (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+    };
     trackArea.addEventListener('pointerdown', block, { passive: false });
     trackArea.addEventListener('touchstart', block, { passive: false });
     trackArea.addEventListener('click', block);
@@ -38,36 +59,67 @@ export function wireTouch(){
 }
 
 export function wireMobileButtons(){
-  const run=document.getElementById('btn-run');
-  const turbo=document.getElementById('btn-turbo');
-  const prevent=(e)=>{ e.preventDefault(); e.stopPropagation(); };
-  const setPressed=(el, pressed)=>{ if(el){ el.classList.toggle('is-pressed', !!pressed); } };
+  const run = document.getElementById('btn-run');
+  const turbo = document.getElementById('btn-turbo');
+  const prevent = (e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const setPressed = (el, pressed)=>{
+    if(el){
+      el.classList.toggle('is-pressed', !!pressed);
+    }
+  };
 
   if(run){
-    const releaseRun=(e)=>{ if(e){ prevent(e); } setPressed(run, false); onRunRelease(); };
-    run.addEventListener('pointerdown',(e)=>{ prevent(e); setPressed(run, true); onRunPress(); }, { passive: false });
+    const releaseRun = (e)=>{
+      if(e){ prevent(e); }
+      setPressed(run, false);
+      onRunRelease();
+    };
+    run.addEventListener('pointerdown', (e)=>{
+      prevent(e);
+      setPressed(run, true);
+      onRunPress();
+    }, { passive: false });
     run.addEventListener('pointerup', releaseRun, { passive: false });
     run.addEventListener('pointercancel', releaseRun, { passive: false });
-    run.addEventListener('pointerleave', ()=>{ setPressed(run, false); onRunRelease(); });
-    run.addEventListener('touchstart',(e)=>{ prevent(e); setPressed(run, true); onRunPress(); }, { passive: false });
+    run.addEventListener('pointerleave', ()=>{
+      setPressed(run, false);
+      onRunRelease();
+    });
+    run.addEventListener('touchstart', (e)=>{
+      prevent(e);
+      setPressed(run, true);
+      onRunPress();
+    }, { passive: false });
     run.addEventListener('touchend', releaseRun, { passive: false });
   }
 
   if(turbo){
-    const releaseTurbo=(e)=>{ if(e){ prevent(e); } setPressed(turbo, false); };
-    const triggerTurbo=(e)=>{
+    const releaseTurbo = (e)=>{
+      if(e){ prevent(e); }
+      setPressed(turbo, false);
+    };
+    const triggerTurbo = (e)=>{
       prevent(e);
       setPressed(turbo, true);
-      activateTurbo();
-      setTimeout(()=>{ setPressed(turbo, false); }, 140);
+      triggerSecondaryAction();
+      setTimeout(()=>{
+        setPressed(turbo, false);
+      }, 140);
     };
     turbo.addEventListener('pointerdown', triggerTurbo, { passive: false });
     turbo.addEventListener('pointerup', releaseTurbo, { passive: false });
     turbo.addEventListener('pointercancel', releaseTurbo, { passive: false });
-    turbo.addEventListener('pointerleave', ()=>{ setPressed(turbo, false); });
+    turbo.addEventListener('pointerleave', ()=>{
+      setPressed(turbo, false);
+    });
     turbo.addEventListener('touchstart', triggerTurbo, { passive: false });
     turbo.addEventListener('touchend', releaseTurbo, { passive: false });
-    turbo.addEventListener('click',(e)=>{ prevent(e); });
+    turbo.addEventListener('click', (e)=>{
+      prevent(e);
+    });
   }
 }
 
@@ -80,7 +132,9 @@ export function wireMobileViewport(){
 
   lockHeight();
   window.addEventListener('resize', lockHeight);
-  window.addEventListener('orientationchange', ()=>{ setTimeout(lockHeight, 120); });
+  window.addEventListener('orientationchange', ()=>{
+    setTimeout(lockHeight, 120);
+  });
 
   document.addEventListener('gesturestart', blockGesture, { passive: false });
   document.addEventListener('gesturechange', blockGesture, { passive: false });
@@ -101,5 +155,71 @@ export function wireMobileViewport(){
   }, { passive: false });
 }
 
-export function wireGamepad(){ let running=false; let turboReady=true; let padIndex=-1; let hintSet=false; const hint=document.getElementById('controls-hint'); const cm=document.getElementById('character-modal'); const gm=document.getElementById('game-modal'); const setHint=(gp)=>{ if(hint){ hint.textContent = gp ? 'Use Gamepad: A=Run, X/RT=Turbo' : 'Touch buttons or use SPACE/G keys'; } }; window.addEventListener('gamepadconnected',(e)=>{ padIndex=e.gamepad && typeof e.gamepad.index==='number' ? e.gamepad.index : 0; setHint(true); }); window.addEventListener('gamepaddisconnected',()=>{ padIndex=-1; setHint(false); }); function poll(){ const pads=navigator.getGamepads ? navigator.getGamepads() : []; const pad=(pads && (padIndex>=0 ? pads[padIndex] : pads[0]))||null; if(pad){ if(!hintSet){ setHint(true); hintSet=true; } const inModal=(cm && !cm.classList.contains('hidden')) || (gm && !gm.classList.contains('hidden')); const aBtn=pad.buttons[0]; const x2=pad.buttons[2]; const x3=pad.buttons[3]; const rtBtn=pad.buttons[7]; const isPressed=(b)=>!!(b && (b.pressed || b.value>0.5)); const a=isPressed(aBtn); const mappingStandard=(pad.mapping==='standard'); const x=(mappingStandard? isPressed(x2) : (isPressed(x2)||isPressed(x3))); const rt=isPressed(rtBtn); if(!inModal){ if(a && !running){ onRunPress(); running=true; } if(!a && running){ onRunRelease(); running=false; } const turboPressed = x || rt; if(turboPressed && turboReady){ activateTurbo(); turboReady=false; setTimeout(()=>{ turboReady=true; }, 250); } } } else { if(hintSet){ setHint(false); hintSet=false; } } requestAnimationFrame(poll); } poll(); }
+export function wireGamepad(){
+  let running = false;
+  let actionReady = true;
+  let padIndex = -1;
+  let hintSet = false;
+  const cm = document.getElementById('character-modal');
+  const gm = document.getElementById('game-modal');
+  const em = document.getElementById('event-modal');
 
+  const setHint = (gp)=>{ refreshControlsHint(gp); };
+
+  window.addEventListener('gamepadconnected', (e)=>{
+    padIndex = e.gamepad && typeof e.gamepad.index === 'number' ? e.gamepad.index : 0;
+    setHint(true);
+  });
+
+  window.addEventListener('gamepaddisconnected', ()=>{
+    padIndex = -1;
+    setHint(false);
+  });
+
+  function poll(){
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const pad = (pads && (padIndex >= 0 ? pads[padIndex] : pads[0])) || null;
+    if(pad){
+      if(!hintSet){
+        setHint(true);
+        hintSet = true;
+      }
+      const inModal = (cm && !cm.classList.contains('hidden')) ||
+        (gm && !gm.classList.contains('hidden')) ||
+        (em && !em.classList.contains('hidden'));
+      const aBtn = pad.buttons[0];
+      const x2 = pad.buttons[2];
+      const x3 = pad.buttons[3];
+      const rtBtn = pad.buttons[7];
+      const isPressed = (button)=>!!(button && (button.pressed || button.value > 0.5));
+      const a = isPressed(aBtn);
+      const mappingStandard = pad.mapping === 'standard';
+      const x = mappingStandard ? isPressed(x2) : (isPressed(x2) || isPressed(x3));
+      const rt = isPressed(rtBtn);
+      if(!inModal){
+        if(a && !running){
+          onRunPress();
+          running = true;
+        }
+        if(!a && running){
+          onRunRelease();
+          running = false;
+        }
+        const actionPressed = x || rt;
+        if(actionPressed && actionReady){
+          triggerSecondaryAction();
+          actionReady = false;
+          setTimeout(()=>{
+            actionReady = true;
+          }, 250);
+        }
+      }
+    } else if(hintSet){
+      setHint(false);
+      hintSet = false;
+    }
+    requestAnimationFrame(poll);
+  }
+
+  poll();
+}

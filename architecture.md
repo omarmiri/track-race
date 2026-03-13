@@ -126,9 +126,13 @@ CPU always uses base tuning (no player perk bonuses).
 ## Scores + Persistence (`highscores.js`)
 - Supabase client from global CDN (`window.supabase`).
 - Visitor ID from FingerprintJS (`window.visitorId`).
-- Writes to `high_scores` table with `game_name='track-dash'`.
+- Writes to `high_scores` table with event-specific `game_name` values:
+  - `track-race-400m-dash`
+  - `track-race-400m-hurdles`
 - Reads personal/global top scores.
-- Offline/error fallback uses localStorage (`track-dash:personal-scores`).
+- Offline/error fallback uses event-specific localStorage keys:
+  - `track-race-400m-dash:personal-scores`
+  - `track-race-400m-hurdles:personal-scores`
 - Results modal supports Personal/Global toggle.
 
 ## External Integrations

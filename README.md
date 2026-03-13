@@ -88,8 +88,12 @@ npx serve .
 
 - Table: `high_scores`
 - Visitor table: `visitors`
-- Game key: `track-dash`
-- Local fallback key: `track-dash:personal-scores`
+- Game keys:
+  - `track-race-400m-dash`
+  - `track-race-400m-hurdles`
+- Local fallback keys:
+  - `track-race-400m-dash:personal-scores`
+  - `track-race-400m-hurdles:personal-scores`
 
 If Supabase is unreachable, personal scores still work locally via `localStorage`.
 
