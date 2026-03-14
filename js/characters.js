@@ -11,11 +11,57 @@ export const characters = {
   'mystery': { emoji: '❓', name: 'Mystery', type: 'bipedal', colors: { primary: '#8b5cf6', secondary: '#7c3aed', accent: '#a78bfa' }, features: { head: 'round', ears: false, tail: false, wings: false } }
 };
 
-function clearExisting(container){ const existing = container.querySelector('.sprite-body'); if(existing && existing.dataset.animationInterval){ clearInterval(parseInt(existing.dataset.animationInterval)); } container.innerHTML=''; }
+function clearSpriteAnimationInterval(spriteBody){
+ const intervalId = parseInt(spriteBody?.dataset.animationInterval || '0', 10);
+ if(!intervalId) return;
+ clearInterval(intervalId);
+ delete spriteBody.dataset.animationInterval;
+}
+
+function setSpriteFrame(spriteBody, frameIndex){
+ if(!spriteBody) return;
+ const cols = parseInt(spriteBody.dataset.spriteCols || '1', 10);
+ const frameWidth = parseInt(spriteBody.dataset.frameWidth || '64', 10);
+ const frameHeight = parseInt(spriteBody.dataset.frameHeight || '64', 10);
+ const col = frameIndex % cols;
+ const row = Math.floor(frameIndex / cols);
+ spriteBody.style.backgroundPosition = `${-col * frameWidth}px ${-row * frameHeight}px`;
+ spriteBody.dataset.currentFrame = String(frameIndex);
+}
+
+export function syncRunnerSpriteAnimation(runnerEl){
+ if(!runnerEl) return;
+ const spriteBody = runnerEl.querySelector('.sprite-body');
+ if(!spriteBody) return;
+
+ const characterKey = runnerEl.dataset.characterKey || '';
+ const shouldAnimate = characterKey === 'dragon' || runnerEl.classList.contains('running');
+ if(shouldAnimate){
+  if(spriteBody.dataset.animationInterval) return;
+  const frameCount = parseInt(spriteBody.dataset.frameCount || '1', 10);
+  const animationSpeed = parseInt(spriteBody.dataset.animationSpeed || '100', 10);
+  const advanceFrame = ()=>{
+   const currentFrame = parseInt(spriteBody.dataset.currentFrame || '0', 10);
+   setSpriteFrame(spriteBody, (currentFrame + 1) % Math.max(frameCount, 1));
+  };
+  const intervalId = setInterval(advanceFrame, animationSpeed);
+  spriteBody.dataset.animationInterval = String(intervalId);
+  return;
+ }
+
+ clearSpriteAnimationInterval(spriteBody);
+ setSpriteFrame(spriteBody, 0);
+}
+
+function clearExisting(container){
+ const existing = container.querySelector('.sprite-body');
+ if(existing){ clearSpriteAnimationInterval(existing); }
+ container.innerHTML='';
+}
 
 function addSpeedLines(container){ const el=document.createElement('div'); el.className='speed-lines absolute inset-0 opacity-0'; el.innerHTML='<div class="absolute top-1/4 left-0 w-3 h-0.5 bg-white opacity-60 rounded-full"></div><div class="absolute top-1/2 left-1 w-4 h-0.5 bg-white opacity-40 rounded-full"></div><div class="absolute top-3/4 left-0 w-2 h-0.5 bg-white opacity-50 rounded-full"></div>'; container.appendChild(el); }
 
-function addShadow(container, type){ const el=document.createElement('div'); el.className = (type==='bipedal') ? 'shadow absolute w-16 h-2 bg-black opacity-20 rounded-full' : 'shadow absolute w-20 h-2 bg-black opacity-20 rounded-full'; el.style.bottom='-14px'; el.style.left='50%'; el.style.transform='translateX(-50%)'; container.appendChild(el); }
+function addShadow(container, type){ const el=document.createElement('div'); el.className = (type==='bipedal') ? 'shadow absolute w-16 h-2 bg-black opacity-20 rounded-full' : 'shadow absolute w-20 h-2 bg-black opacity-20 rounded-full'; el.style.bottom='-14px'; el.style.left='50%'; container.appendChild(el); }
 
 function addDust(container){ const el=document.createElement('div'); el.className='dust-cloud absolute opacity-0'; el.innerHTML='<div class="absolute w-1 h-1 bg-yellow-600 opacity-60 rounded-full" style="bottom: -20px; left: -5px;"></div><div class="absolute w-1 h-1 bg-yellow-700 opacity-40 rounded-full" style="bottom: -18px; left: -8px;"></div><div class="absolute w-1 h-1 bg-yellow-600 opacity-50 rounded-full" style="bottom: -22px; left: -3px;"></div>'; container.appendChild(el); }
 
@@ -38,11 +84,14 @@ export function createEmojiCharacter(runnerEl, character, key){
    spriteBody.style.width=w+'px';
    spriteBody.style.height=h+'px';
    spriteBody.style.backgroundSize=`${sw}px ${sh}px`;
-   let current=0;
-   const animate=()=>{ const col=current%cols; const row=Math.floor(current/cols); const x=-col*w; const y=-row*h; spriteBody.style.backgroundPosition=`${x}px ${y}px`; current=(current+1)%character.sprite.frames; };
-   const id=setInterval(animate, character.sprite.animationSpeed);
-   spriteBody.dataset.animationInterval=id;
+   spriteBody.dataset.spriteCols=String(cols);
+   spriteBody.dataset.frameWidth=String(w);
+   spriteBody.dataset.frameHeight=String(h);
+   spriteBody.dataset.frameCount=String(character.sprite.frames);
+   spriteBody.dataset.animationSpeed=String(character.sprite.animationSpeed);
+   setSpriteFrame(spriteBody, 0);
    container.appendChild(spriteBody);
+   syncRunnerSpriteAnimation(container);
   };
   setup(fw || 64, fh || 64, (fw || 64)*cols, (fh || 64)*rows);
  } else {

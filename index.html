@@ -13,14 +13,6 @@
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); gtag('config', 'G-5KB9EJ4VX2');
   </script>
-  <script>
-    const fpPromise = import('https://fpjscdn.net/v3/UZdGObt4WgWHDR1uCb9O').then(FingerprintJS => FingerprintJS.load());
-    fpPromise.then(fp => fp.get()).then(result => {
-      window.visitorId = result.visitorId;
-      if (typeof initializeHighScores === 'function') { initializeHighScores(); }
-      else { document.addEventListener('DOMContentLoaded', () => { if (typeof initializeHighScores === 'function') initializeHighScores(); }); }
-    }).catch(() => { window.visitorId = 'fallback_' + Date.now() + '_' + Math.random().toString(36).substr(2,9); });
-  </script>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script>window.SUPABASE_URL='https://pbghclvypsddddimxmxu.supabase.co'; window.SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBiZ2hjbHZ5cHNkZGRkaW14bXh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjAwODQxMDUsImV4cCI6MjA3NTY2MDEwNX0.LHmml1ISFot98yPw_4zmzPy6xaefjKeNUfqOWW_B6wg';</script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -33,10 +25,17 @@
         <button id="back-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Back</button>
         <button id="scores-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">🏆 Best Times</button>
         <button id="change-event-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Change Event</button>
+        <div id="coins-pill" class="px-3 py-1 text-[10px] sm:text-xs font-bold rounded-full bg-yellow-300 text-[#5b4600] shadow-sm whitespace-nowrap">
+          Coins: <span id="coins-count">0</span>
+        </div>
         <button id="change-character-header-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Change Character</button>
+        <button id="edit-controls-btn" class="px-2 py-1 text-xs font-bold rounded bg-[#bac6ea] text-[#2f3b58]">Move Controls</button>
       </div>
       <div id="hud-center" class="shrink-0">
-        <div id="timer" class="text-sm sm:text-lg md:text-2xl font-mono">00:00:000</div>
+        <div id="timer-row" class="flex items-center justify-center gap-2 whitespace-nowrap">
+          <div id="timer" class="text-sm sm:text-lg md:text-2xl font-mono">00:00:000</div>
+          <div id="race-gap" class="hidden text-xs sm:text-sm md:text-lg font-bold font-mono"></div>
+        </div>
         <div id="stamina-wrap" aria-live="polite">
           <span id="stamina-label">Stamina</span>
           <div id="stamina-bar" role="progressbar" aria-label="Player stamina" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
@@ -45,8 +44,8 @@
           <span id="stamina-value">100%</span>
         </div>
       </div>
-      <div class="text-right shrink-0">
-        <div id="secondary-action-label" class="text-xs sm:text-sm uppercase">Turbo</div>
+      <div id="secondary-action-wrap" class="shrink-0 flex items-center justify-end gap-2 whitespace-nowrap">
+        <div id="secondary-action-label" class="text-xs sm:text-sm uppercase">Sprint</div>
         <div id="turbo-status" class="text-sm sm:text-base md:text-xl font-bold text-green-400">READY</div>
       </div>
     </div>
@@ -57,11 +56,11 @@
         <div id="event-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <button class="event-btn rounded-xl border-2 border-[#7aa8b0] bg-[#294b50] px-4 py-5 text-left text-white transition-all hover:border-yellow-300" data-event="dash">
             <div class="text-sm sm:text-base font-bold text-yellow-300 mb-2">400m Dash</div>
-            <div class="text-[10px] sm:text-xs leading-relaxed opacity-85">Classic one-lap sprint with stamina, turbo, and race perks.</div>
+            <div class="text-[10px] sm:text-xs leading-relaxed opacity-85">Classic one-lap sprint with stamina, sprint bursts, and race perks.</div>
           </button>
           <button class="event-btn rounded-xl border-2 border-[#7aa8b0] bg-[#294b50] px-4 py-5 text-left text-white transition-all hover:border-yellow-300" data-event="hurdles">
             <div class="text-sm sm:text-base font-bold text-yellow-300 mb-2">400m Hurdles</div>
-            <div class="text-[10px] sm:text-xs leading-relaxed opacity-85">Ten hurdles over one lap. Turbo becomes jump, and timing matters.</div>
+            <div class="text-[10px] sm:text-xs leading-relaxed opacity-85">Ten hurdles over one lap. Sprint becomes jump, and timing matters.</div>
           </button>
         </div>
       </div>
@@ -120,7 +119,8 @@
           <div class="text-xs sm:text-sm font-bold">Mystery</div>
         </button>
       </div>
-      <p class="text-white text-sm mb-2 opacity-80">Select your character to race!</p>
+      <div id="character-balance" class="text-yellow-200 text-xs mb-2">Coins: 0</div>
+      <p id="character-note" class="text-white text-sm mb-2 opacity-80">Select your character or unlock a new racer.</p>
     </div>
 
     <div id="game-modal" class="absolute inset-0 bg-black/72 flex items-end sm:items-center justify-center z-40 text-center hidden">
@@ -146,9 +146,16 @@
           <p id="modal-text" class="text-sm sm:text-lg text-white mb-3 text-center px-2 opacity-90">Ready to race?</p>
           <div id="race-perk-wrap" class="mt-2 mb-2 flex flex-col items-center gap-2">
             <div class="text-[10px] sm:text-xs text-slate-200 uppercase tracking-wide">Race Perk</div>
+            <div id="race-perk-balance" class="text-[10px] sm:text-xs text-yellow-200">Coins: 0</div>
             <div id="race-perk-picker" class="w-full max-w-md grid grid-cols-2 gap-2">
-              <button type="button" class="race-perk-btn px-2 py-2 text-[10px] sm:text-xs font-bold rounded bg-slate-600 text-slate-100" data-perk="speed">+Speed</button>
-              <button type="button" class="race-perk-btn px-2 py-2 text-[10px] sm:text-xs font-bold rounded bg-slate-600 text-slate-100" data-perk="turbo">Turbo 4s CD</button>
+              <button type="button" class="race-perk-btn px-2 py-2 text-[10px] sm:text-xs font-bold rounded bg-slate-600 text-slate-100" data-perk="speed">
+                <span class="race-perk-title">+Speed</span>
+                <span class="race-perk-price">2 coins</span>
+              </button>
+              <button type="button" class="race-perk-btn px-2 py-2 text-[10px] sm:text-xs font-bold rounded bg-slate-600 text-slate-100" data-perk="turbo">
+                <span class="race-perk-title">Sprint 4s CD</span>
+                <span class="race-perk-price">2 coins</span>
+              </button>
             </div>
           </div>
           <div id="race-time-display" class="text-base sm:text-xl text-yellow-300 font-bold mt-2 hidden">
@@ -181,9 +188,20 @@
           <div id="computer" class="runner absolute" style="width: 64px; height: 64px;"></div>
         </div>
       </div>
-      <div id="mobile-controls" class="w-full flex items-center justify-center gap-3 mt-3">
-        <button id="btn-run" class="px-4 py-3 text-sm font-bold rounded bg-blue-500 text-white">Run</button>
-        <button id="btn-turbo" class="px-4 py-3 text-sm font-bold rounded bg-green-500 text-white">Turbo</button>
+      <div id="mobile-controls" aria-live="polite">
+        <div id="controls-edit-panel" class="hidden">
+          <div id="controls-edit-text">Drag the buttons where they feel best.</div>
+          <div id="controls-edit-actions">
+            <button id="controls-reset-btn" type="button">Reset</button>
+            <button id="controls-done-btn" type="button">Done</button>
+          </div>
+        </div>
+        <div class="mobile-control-pad" data-control="run">
+          <button id="btn-run" class="mobile-action-btn px-4 py-3 text-sm font-bold rounded bg-blue-500 text-white">Run</button>
+        </div>
+        <div class="mobile-control-pad" data-control="secondary">
+          <button id="btn-turbo" class="mobile-action-btn px-4 py-3 text-sm font-bold rounded bg-green-500 text-white">Sprint</button>
+        </div>
       </div>
   </div>
   <div id="highscores-modal" class="absolute inset-0 bg-black/30 flex flex-col items-center justify-center z-50 text-center p-4 hidden">

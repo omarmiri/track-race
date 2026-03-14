@@ -25,7 +25,7 @@ Current core behavior:
 - `track-race/levels/`: reserved.
 
 ## Runtime Flow
-1. `index.html` loads CDN scripts (GA, FingerprintJS, Supabase, Tailwind), CSS, and `js/main.js`.
+1. `index.html` loads CDN scripts (GA, Supabase, Tailwind), CSS, and `js/main.js`.
 2. `main.js:init()` runs on `DOMContentLoaded`.
 3. Character modal opens first (`#character-modal`).
 4. After character pick, pre-race modal (`#game-modal`) opens:
@@ -125,7 +125,7 @@ CPU always uses base tuning (no player perk bonuses).
 
 ## Scores + Persistence (`highscores.js`)
 - Supabase client from global CDN (`window.supabase`).
-- Visitor ID from FingerprintJS (`window.visitorId`).
+- Visitor ID from a locally generated ID stored on the device/browser (`window.visitorId`).
 - Writes to `high_scores` table with event-specific `game_name` values:
   - `track-race-400m-dash`
   - `track-race-400m-hurdles`
@@ -138,7 +138,7 @@ CPU always uses base tuning (no player perk bonuses).
 ## External Integrations
 Loaded in `index.html`:
 - Google Analytics (`gtag`).
-- FingerprintJS visitor identity.
+- A first-party locally generated visitor ID for score ownership.
 - Supabase JS CDN.
 - Tailwind CDN (utility styling still used).
 

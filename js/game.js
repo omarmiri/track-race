@@ -1,7 +1,7 @@
 import { TURBO_DURATION, TURBO_COOLDOWN, TRACK_DISTANCE_UNITS } from './config.js';
 import { getSpeedMultiplier, TURBO_BOOST_AMOUNT } from './speed.js';
-import { setSecondaryActionType, updateJumpUI, updateTimer, updateTurboUI, updateStaminaUI } from './ui.js';
-import { characters, updateRunnerAppearance } from './characters.js';
+import { clearRaceGap, formatTime, setSecondaryActionType, updateJumpUI, updateRaceGap, updateTimer, updateTurboUI, updateStaminaUI } from './ui.js';
+import { characters, syncRunnerSpriteAnimation, updateRunnerAppearance } from './characters.js';
 import { DEFAULT_EVENT_ID, EVENT_DASH, EVENT_HURDLES, getRaceEventMeta, normalizeEventId } from './events.js';
 
 const LANE_COUNT = 6;
@@ -26,7 +26,7 @@ const MAX_EXTRA_FATIGUE = 0.22;
 const STEADY_RECOVERY_PER_SECOND = 0.0075;
 const RUN_PULSE_DECAY_PER_SECOND = 2.25;
 const RUN_PULSE_FLOOR = 0.1;
-const AI_TAP_INTERVAL_JITTER_MS = 10;
+const AI_TAP_INTERVAL_JITTER_MS = 18;
 const AI_STYLE_SEQUENCE = ['steady', 'fast-start', 'strong-finish', 'steady', 'strong-finish'];
 const STAMINA_CURVE_POINTS = [
   100, 98, 96, 94, 92, 90, 88, 86, 84, 82,
@@ -46,13 +46,17 @@ const HURDLE_HIT_MS = 620;
 const HURDLE_HIT_SPEED_FACTOR = 0.56;
 const AI_JUMP_LOOKAHEAD_BASE = 1.05;
 const AI_JUMP_LOOKAHEAD_SPEED_FACTOR = 0.05;
-const AI_JUMP_MISS_CHANCE = 0.09;
+const AI_JUMP_MISS_CHANCE = 0.12;
 const HURDLE_FATIGUE_PENALTY = 0.028;
 const HURDLES_FINISH_BASELINE_STAMINA = 0.9;
 const HURDLES_MAX_EXTRA_FATIGUE = 0.3;
 const HURDLES_RECOVERY_START_METERS = 18;
 const HURDLES_RECOVERY_MULT = 4.4;
 const HURDLES_RHYTHM_RECOVERY_PER_TAP = 0.0016;
+const FINISH_COAST_MS = 950;
+const FINISH_COAST_OVERSHOOT_UNITS = 2.4;
+const FINISH_COAST_DECEL = 7.5;
+const FINISH_COAST_MIN_SPEED = 0.82;
 
 let currentEvent = DEFAULT_EVENT_ID;
 let isGameRunning=false; let isGameOver=false; let startTime=0;
@@ -60,12 +64,13 @@ let playerPos=0; let playerSpeed=0;
 let isTurboReady=true;
 let runInputActive=false;
 let playerTurboUntil=0;
-let playerRacePerk='speed';
+let playerRacePerk='none';
 let playerTurboCooldownMs=TURBO_COOLDOWN;
 let playerJumpUntil=0;
 let playerHurdleHitUntil=0;
 let playerNextHurdleIndex=0;
 let playerFinishTimeMs=null;
+let finishCoastUntil=0;
 
 let cpuHasStarted=false;
 let aiRunners=[];
@@ -86,7 +91,186 @@ let playerTurboCooldownIntervalId=0;
 let lastTime=0; let accumulator=0; const STEP=1/60;
 
 let cameraX=0; let cameraY=0;
-const RUNNER_HALF_SIZE=32;
+const RUNNER_BASE_SIZE = 64;
+const RUNNER_HALF_SIZE = RUNNER_BASE_SIZE * 0.5;
+const RUNNER_SAFE_LANE_FRACTION = 0.94;
+const RUNNER_MIN_SCALE = 0.66;
+const RUNNER_MAX_SCALE = 0.96;
+const RUNNER_QUADRUPED_SCALE = 0.95;
+const RUNNER_BIPED_FOOT_LANE_FRACTION = 0.9;
+const RUNNER_QUADRUPED_FOOT_LANE_FRACTION = 0.84;
+const RUNNER_BIPED_FOOT_ANCHOR_Y = 56;
+const RUNNER_QUADRUPED_FOOT_ANCHOR_Y = 50;
+const RUNNER_TRACK_VISUAL_OFFSET_BY_CHARACTER = {
+  dragon: 0.31,
+  gorilla: 0.31,
+  dinosaur: 0.25
+};
+const RUNNER_SCALE_MULTIPLIER_BY_CHARACTER = {
+  dragon: 1.6,
+  gorilla: 1.6,
+  dinosaur: 1.6,
+  dog: 1.6,
+  cat: 1.6
+};
+const DEFAULT_TRACK_THEME_KEY = 'blue-racer';
+const PLAIN_TRACK_THEME_KEYS = new Set(['blue-racer', 'red-racer']);
+const TRACK_THEMES = {
+  'blue-racer': {
+    grassInner: '#86b58f',
+    grassMid: '#6ea17f',
+    grassOuter: '#5f8f70',
+    infieldInner: '#8ac196',
+    infieldMid: '#72a77d',
+    infieldOuter: '#628f6c',
+    trackTop: '#cc7a43',
+    trackBottom: '#b76634',
+    trackEdge: '#6f3417',
+    laneDivider: 'rgba(255, 246, 206, 0.72)',
+    hurdleBarNear: '#e6edf6',
+    hurdleBarFar: '#fbfdff',
+    hurdleStandNear: '#0b1220',
+    hurdleStandFar: '#1f2937',
+    hurdleShadow: 'rgba(15, 23, 42, 0.24)'
+  },
+  'red-racer': {
+    grassInner: '#86b58f',
+    grassMid: '#6ea17f',
+    grassOuter: '#5f8f70',
+    infieldInner: '#8ac196',
+    infieldMid: '#72a77d',
+    infieldOuter: '#628f6c',
+    trackTop: '#cc7a43',
+    trackBottom: '#b76634',
+    trackEdge: '#6f3417',
+    laneDivider: 'rgba(255, 246, 206, 0.72)',
+    hurdleBarNear: '#e6edf6',
+    hurdleBarFar: '#fbfdff',
+    hurdleStandNear: '#0b1220',
+    hurdleStandFar: '#1f2937',
+    hurdleShadow: 'rgba(15, 23, 42, 0.24)'
+  },
+  dragon: {
+    grassInner: '#86c9a5',
+    grassMid: '#58a175',
+    grassOuter: '#3d7356',
+    infieldInner: '#91d3ae',
+    infieldMid: '#68b488',
+    infieldOuter: '#467b5f',
+    trackTop: '#82627f',
+    trackBottom: '#66485f',
+    trackEdge: '#402141',
+    laneDivider: 'rgba(250, 234, 176, 0.8)',
+    hurdleBarNear: '#efe4c8',
+    hurdleBarFar: '#fff8eb',
+    hurdleStandNear: '#412356',
+    hurdleStandFar: '#74459a',
+    hurdleShadow: 'rgba(57, 32, 77, 0.24)'
+  },
+  gorilla: {
+    grassInner: '#769f6d',
+    grassMid: '#4d7443',
+    grassOuter: '#365333',
+    infieldInner: '#82aa77',
+    infieldMid: '#5c7d50',
+    infieldOuter: '#415e39',
+    trackTop: '#8f6645',
+    trackBottom: '#6f472d',
+    trackEdge: '#402413',
+    laneDivider: 'rgba(234, 220, 183, 0.76)',
+    hurdleBarNear: '#eee8db',
+    hurdleBarFar: '#fbf7ef',
+    hurdleStandNear: '#1b1d20',
+    hurdleStandFar: '#454b52',
+    hurdleShadow: 'rgba(20, 24, 28, 0.24)'
+  },
+  dinosaur: {
+    grassInner: '#81ca69',
+    grassMid: '#57aa4a',
+    grassOuter: '#38793d',
+    infieldInner: '#8ed676',
+    infieldMid: '#68bb58',
+    infieldOuter: '#438a44',
+    trackTop: '#8b6d4d',
+    trackBottom: '#6d5239',
+    trackEdge: '#47331e',
+    laneDivider: 'rgba(239, 246, 221, 0.82)',
+    hurdleBarNear: '#edf7ea',
+    hurdleBarFar: '#fbfffb',
+    hurdleStandNear: '#215833',
+    hurdleStandFar: '#3d8152',
+    hurdleShadow: 'rgba(24, 66, 41, 0.22)'
+  },
+  capybara: {
+    grassInner: '#8fbd80',
+    grassMid: '#6a986d',
+    grassOuter: '#517859',
+    infieldInner: '#9bc88d',
+    infieldMid: '#7aa87b',
+    infieldOuter: '#5e8662',
+    trackTop: '#a26e47',
+    trackBottom: '#805337',
+    trackEdge: '#54321d',
+    laneDivider: 'rgba(245, 229, 190, 0.78)',
+    hurdleBarNear: '#f4eadb',
+    hurdleBarFar: '#fff8ef',
+    hurdleStandNear: '#6d4328',
+    hurdleStandFar: '#9a613d',
+    hurdleShadow: 'rgba(69, 46, 31, 0.22)'
+  },
+  dog: {
+    grassInner: '#91ca72',
+    grassMid: '#70ac53',
+    grassOuter: '#538540',
+    infieldInner: '#9dd57d',
+    infieldMid: '#80bc61',
+    infieldOuter: '#62964a',
+    trackTop: '#cb8748',
+    trackBottom: '#ab6a35',
+    trackEdge: '#74411d',
+    laneDivider: 'rgba(255, 249, 239, 0.8)',
+    hurdleBarNear: '#f7f2ea',
+    hurdleBarFar: '#ffffff',
+    hurdleStandNear: '#8f4d1f',
+    hurdleStandFar: '#bf7338',
+    hurdleShadow: 'rgba(79, 43, 19, 0.22)'
+  },
+  cat: {
+    grassInner: '#9bc8a9',
+    grassMid: '#76ad87',
+    grassOuter: '#598265',
+    infieldInner: '#a7d2b5',
+    infieldMid: '#86bc98',
+    infieldOuter: '#6b9778',
+    trackTop: '#a26f76',
+    trackBottom: '#84535a',
+    trackEdge: '#522f38',
+    laneDivider: 'rgba(255, 239, 247, 0.82)',
+    hurdleBarNear: '#fff2f8',
+    hurdleBarFar: '#fffafb',
+    hurdleStandNear: '#ab2f69',
+    hurdleStandFar: '#d45b93',
+    hurdleShadow: 'rgba(92, 31, 58, 0.22)'
+  },
+  cow: {
+    grassInner: '#94c179',
+    grassMid: '#6f9f5a',
+    grassOuter: '#507847',
+    infieldInner: '#a2cb88',
+    infieldMid: '#80b069',
+    infieldOuter: '#5f8a54',
+    trackTop: '#7c5a43',
+    trackBottom: '#624330',
+    trackEdge: '#3b2418',
+    laneDivider: 'rgba(248, 248, 241, 0.82)',
+    hurdleBarNear: '#f8f7f2',
+    hurdleBarFar: '#ffffff',
+    hurdleStandNear: '#3643a2',
+    hurdleStandFar: '#5967d0',
+    hurdleShadow: 'rgba(36, 42, 90, 0.22)'
+  }
+};
+let currentTrackThemeKey = DEFAULT_TRACK_THEME_KEY;
 
 const trackGeom = {
   worldWidth: 2200,
@@ -105,6 +289,7 @@ function moveTowards(current, target, maxDelta){
 function resetTimerDisplay(){
   const timer = document.getElementById('timer');
   if(timer){ timer.textContent = '00:00:000'; }
+  clearRaceGap();
 }
 function clearPlayerTurboCooldownInterval(){
   if(playerTurboCooldownIntervalId){
@@ -114,7 +299,7 @@ function clearPlayerTurboCooldownInterval(){
 }
 
 export function setPlayerRacePerk(perk){
-  playerRacePerk = (perk === 'turbo') ? 'turbo' : 'speed';
+  playerRacePerk = (perk === 'turbo' || perk === 'speed') ? perk : 'none';
   playerTurboCooldownMs = playerRacePerk === 'turbo' ? FAST_TURBO_COOLDOWN_MS : TURBO_COOLDOWN;
 }
 
@@ -226,6 +411,65 @@ function getTrackNodes(){
   return { area, world, oval, divider, infield, finish, hurdleLayer };
 }
 
+function getTrackTheme(themeKey){
+  return TRACK_THEMES[themeKey] || TRACK_THEMES[DEFAULT_TRACK_THEME_KEY];
+}
+
+function resolveTrackThemeKey(characterKey){
+  return TRACK_THEMES[characterKey] ? characterKey : DEFAULT_TRACK_THEME_KEY;
+}
+
+function applyTrackTheme(themeKey){
+  const { area } = getTrackNodes();
+  if(!area) return;
+  const resolvedThemeKey = resolveTrackThemeKey(themeKey);
+  const theme = getTrackTheme(resolvedThemeKey);
+  currentTrackThemeKey = resolvedThemeKey;
+  area.dataset.trackTheme = resolvedThemeKey;
+  area.style.setProperty('--track-grass-inner', theme.grassInner);
+  area.style.setProperty('--track-grass-mid', theme.grassMid);
+  area.style.setProperty('--track-grass-outer', theme.grassOuter);
+  area.style.setProperty('--infield-grass-inner', theme.infieldInner);
+  area.style.setProperty('--infield-grass-mid', theme.infieldMid);
+  area.style.setProperty('--infield-grass-outer', theme.infieldOuter);
+  area.style.setProperty('--track-surface-top', theme.trackTop);
+  area.style.setProperty('--track-surface-bottom', theme.trackBottom);
+  area.style.setProperty('--track-surface-edge', theme.trackEdge);
+  area.style.setProperty('--lane-divider-color', theme.laneDivider);
+  area.style.setProperty('--hurdle-bar-near-color', theme.hurdleBarNear);
+  area.style.setProperty('--hurdle-bar-far-color', theme.hurdleBarFar);
+  area.style.setProperty('--hurdle-stand-near-color', theme.hurdleStandNear);
+  area.style.setProperty('--hurdle-stand-far-color', theme.hurdleStandFar);
+  area.style.setProperty('--hurdle-shadow-color', theme.hurdleShadow);
+}
+
+function getActiveTrackThemeKeys(){
+  const runnerIds = ['player', 'computer', ...EXTRA_CPU_RUNNERS.map((cfg)=>cfg.id)];
+  const uniqueKeys = new Set();
+  for(const id of runnerIds){
+    const key = document.getElementById(id)?.dataset.characterKey;
+    if(!key) continue;
+    uniqueKeys.add(resolveTrackThemeKey(key));
+  }
+  return Array.from(uniqueKeys);
+}
+
+function pickNextTrackThemeKey(){
+  const activeKeys = getActiveTrackThemeKeys();
+  const themedKeys = activeKeys.filter((key)=>!PLAIN_TRACK_THEME_KEYS.has(key));
+  let pool = themedKeys.length ? themedKeys : activeKeys;
+  if(!pool.length){
+    pool = [DEFAULT_TRACK_THEME_KEY];
+  }
+  if(pool.length > 1 && pool.includes(currentTrackThemeKey)){
+    const alternatives = pool.filter((key)=>key !== currentTrackThemeKey);
+    if(alternatives.length){
+      pool = alternatives;
+    }
+  }
+  return pool[Math.floor(Math.random() * pool.length)] || DEFAULT_TRACK_THEME_KEY;
+}
+
 function ensureExtraRunners(){
   const world = document.getElementById('track-world');
   if(!world) return;
@@ -295,19 +539,25 @@ function ensureHurdleEls(){
   }
 
   const total = LANE_COUNT * HURDLE_METERS.length;
-  if(!Array.isArray(trackGeom.hurdleEls) || trackGeom.hurdleEls.length !== total){
+  const needsRebuild = !Array.isArray(trackGeom.hurdleEls)
+    || trackGeom.hurdleEls.length !== total
+    || !trackGeom.hurdleEls[0]?.querySelector('.hurdle-shadow');
+  if(needsRebuild){
     hurdleLayer.innerHTML = '';
     trackGeom.hurdleEls = [];
     for(let laneIndex = 0; laneIndex < LANE_COUNT; laneIndex++){
       for(let hurdleIndex = 0; hurdleIndex < HURDLE_METERS.length; hurdleIndex++){
         const el = document.createElement('div');
         el.className = 'track-hurdle';
+        const shadow = document.createElement('span');
+        shadow.className = 'hurdle-shadow';
         const leftStand = document.createElement('span');
         leftStand.className = 'hurdle-stand hurdle-stand-left';
         const rightStand = document.createElement('span');
         rightStand.className = 'hurdle-stand hurdle-stand-right';
         const bar = document.createElement('span');
         bar.className = 'hurdle-bar';
+        el.appendChild(shadow);
         el.appendChild(leftStand);
         el.appendChild(rightStand);
         el.appendChild(bar);
@@ -318,6 +568,99 @@ function ensureHurdleEls(){
   }
 
   return trackGeom.hurdleEls;
+}
+
+function styleHurdleEl(el, point, hurdleWidth, hurdleHeight){
+  const theme = getTrackTheme(currentTrackThemeKey);
+  const radius = Math.max(trackGeom.outerRadius || 1, 1);
+  const depthFactor = clamp((point.y - trackGeom.centerY) / radius, -1, 1);
+  const depthAbs = Math.abs(depthFactor);
+  const tangentX = point.tangentX ?? point.dx;
+  const tangentY = point.tangentY ?? point.dy;
+  const curveFactor = clamp(Math.abs(tangentY), 0, 1);
+  const nearSign = tangentX === 0 ? (depthFactor >= 0 ? 1 : -1) : Math.sign(tangentX);
+  const nearRight = nearSign >= 0;
+  const barTilt = nearSign * (0.95 + curveFactor * 3.9 + depthAbs * 1.1);
+  const barSkew = nearSign * (curveFactor * 5.9 + depthAbs * 1.2);
+  const frontWidth = clamp(hurdleWidth * 0.102, 2.8, 4.2);
+  const backWidth = clamp(frontWidth - 0.7, 1.8, 3.0);
+  const frontTilt = nearSign * (3.1 + curveFactor * 2.9 + depthAbs * 0.45);
+  const backTilt = nearSign * (1.0 + curveFactor * 1.8);
+  const leftTilt = nearRight ? -backTilt : -frontTilt;
+  const rightTilt = nearRight ? frontTilt : backTilt;
+  const leftWidth = nearRight ? backWidth : frontWidth;
+  const rightWidth = nearRight ? frontWidth : backWidth;
+  const leftOpacity = nearRight ? 0.68 : 0.88;
+  const rightOpacity = nearRight ? 0.88 : 0.68;
+  const barHeight = clamp(hurdleHeight * 0.3, 6.5, 9.5);
+  const standHeight = 60 + curveFactor * 6 + depthAbs * 2;
+  const shadowSkew = nearSign * (curveFactor * 6.4 + depthFactor * 2.2);
+  const shadowOffset = 3.8 + depthAbs * 1.9 + curveFactor * 1.25;
+  const shadowOpacity = clamp(0.15 + depthAbs * 0.06 + curveFactor * 0.05, 0.15, 0.26);
+  const barNearColor = theme.hurdleBarNear;
+  const barFarColor = theme.hurdleBarFar;
+  const nearStandColor = theme.hurdleStandNear;
+  const farStandColor = theme.hurdleStandFar;
+
+  el.classList.toggle('near-right', nearRight);
+  el.classList.toggle('near-left', !nearRight);
+  el.style.setProperty('--bar-height', `${barHeight.toFixed(2)}px`);
+  el.style.setProperty('--bar-tilt', `${barTilt.toFixed(2)}deg`);
+  el.style.setProperty('--bar-skew', `${barSkew.toFixed(2)}deg`);
+  el.style.setProperty('--left-tilt', `${leftTilt.toFixed(2)}deg`);
+  el.style.setProperty('--right-tilt', `${rightTilt.toFixed(2)}deg`);
+  el.style.setProperty('--left-width', `${leftWidth.toFixed(2)}px`);
+  el.style.setProperty('--right-width', `${rightWidth.toFixed(2)}px`);
+  el.style.setProperty('--left-opacity', leftOpacity.toFixed(2));
+  el.style.setProperty('--right-opacity', rightOpacity.toFixed(2));
+  el.style.setProperty('--stand-height', `${standHeight.toFixed(2)}%`);
+  el.style.setProperty('--shadow-skew', `${shadowSkew.toFixed(2)}deg`);
+  el.style.setProperty('--shadow-offset', `${shadowOffset.toFixed(2)}px`);
+  el.style.setProperty('--shadow-opacity', shadowOpacity.toFixed(2));
+  el.style.setProperty('--bar-near-color', barNearColor);
+  el.style.setProperty('--bar-far-color', barFarColor);
+  el.style.setProperty('--stand-near-color', nearStandColor);
+  el.style.setProperty('--stand-far-color', farStandColor);
+  el.style.setProperty('--hurdle-shadow-color', theme.hurdleShadow);
+}
+
+function getHurdlePose(units, laneIndex){
+  const sampleDelta = Math.max(0.18, laneUnitsFromMeters(4.5, laneIndex));
+  const prevPoint = getPointOnTrack(Math.max(0, units - sampleDelta), laneIndex);
+  const nextPoint = getPointOnTrack(Math.min(getLapUnits(), units + sampleDelta), laneIndex);
+  const point = getPointOnTrack(units, laneIndex);
+  const spanDx = nextPoint.x - prevPoint.x;
+  const spanDy = nextPoint.y - prevPoint.y;
+  const tangentLength = Math.hypot(spanDx, spanDy) || 1;
+  const tangentX = spanDx / tangentLength;
+  const tangentY = spanDy / tangentLength;
+  const normalX = -tangentY;
+  const normalY = tangentX;
+  return {
+    ...point,
+    tangentX,
+    tangentY,
+    normalX,
+    normalY
+  };
+}
+
+function normalizeAngleDegrees(angle){
+  let normalized = angle % 360;
+  if(normalized > 180) normalized -= 360;
+  if(normalized <= -180) normalized += 360;
+  return normalized;
+}
+
+function getReadableHurdleAngle(point){
+  const baseAngle = (Math.atan2(point.tangentY, point.tangentX) * 180 / Math.PI) + 90;
+  if(!`${point.segment || ''}`.includes('bend')) return baseAngle;
+  const normalized = normalizeAngleDegrees(baseAngle);
+  const verticalBase = normalized >= 0 ? 90 : -90;
+  const deltaFromVertical = normalized - verticalBase;
+  const maxDelta = lerp(89, 83, clamp(Math.abs(point.tangentY), 0, 1));
+  const softened = verticalBase + clamp(deltaFromVertical, -maxDelta, maxDelta);
+  return baseAngle + (softened - normalized);
 }
 
 function renderHurdles(){
@@ -337,15 +680,17 @@ function renderHurdles(){
     for(const hurdleMeters of HURDLE_METERS){
       const el = hurdleEls[idx++];
       if(!el) continue;
-      const point = getPointOnTrack(laneProgressUnitsFromMeters(hurdleMeters, laneIndex), laneIndex);
-      const angle = (Math.atan2(point.dy, point.dx) * 180 / Math.PI) + 90;
-      const hurdleWidth = Math.max(28, Math.round(laneWidth * 0.78));
+      const hurdleUnits = laneProgressUnitsFromMeters(hurdleMeters, laneIndex);
+      const point = getHurdlePose(hurdleUnits, laneIndex);
+      const angle = getReadableHurdleAngle(point);
+      const hurdleWidth = Math.max(30, Math.round(laneWidth * 0.88));
       const hurdleHeight = Math.max(18, Math.round(laneWidth * 0.5));
-      el.style.left = `${Math.round(point.x)}px`;
-      el.style.top = `${Math.round(point.y)}px`;
+      el.style.left = `${point.x.toFixed(2)}px`;
+      el.style.top = `${point.y.toFixed(2)}px`;
       el.style.width = `${hurdleWidth}px`;
       el.style.height = `${hurdleHeight}px`;
-      el.style.transform = `translate(-50%, -50%) rotate(${Math.round(angle)}deg)`;
+      el.style.transform = `translate(-50%, -50%) rotate(${angle.toFixed(2)}deg)`;
+      styleHurdleEl(el, point, hurdleWidth, hurdleHeight);
     }
   }
 }
@@ -473,7 +818,12 @@ function computeTrackGeometry(){
 
 function laneMetrics(laneIndex){
   const i = clamp(laneIndex, 0, LANE_COUNT - 1);
-  const r = (trackGeom.innerRadius || 100) + (trackGeom.laneWidth || 18) * (i + 0.5);
+  return laneMetricsAtPosition(i + 0.5);
+}
+
+function laneMetricsAtPosition(lanePosition){
+  const pos = clamp(lanePosition, 0.02, LANE_COUNT - 0.02);
+  const r = (trackGeom.innerRadius || 100) + (trackGeom.laneWidth || 18) * pos;
   const straight = trackGeom.straightLen || 300;
   const halfStraight = straight * 0.5;
   const laneLength = straight * 2 + Math.PI * r * 2;
@@ -486,12 +836,18 @@ function getStartOffsetUnits(laneIndex){
 }
 
 function getPointOnTrack(units, laneIndex){
-  const m = laneMetrics(laneIndex);
+  const i = clamp(laneIndex, 0, LANE_COUNT - 1);
+  return getPointOnTrackAtLanePosition(units, i + 0.5);
+}
+
+function getPointOnTrackAtLanePosition(units, lanePosition){
+  const m = laneMetricsAtPosition(lanePosition);
   const leftCx = trackGeom.leftTurnCx || (trackGeom.centerX - m.halfStraight);
   const rightCx = trackGeom.rightTurnCx || (trackGeom.centerX + m.halfStraight);
   const cy = trackGeom.centerY;
 
-  const progress = clamp(units / getLapUnits(), 0, 1);
+  const maxProgress = 1 + (FINISH_COAST_OVERSHOOT_UNITS / getLapUnits());
+  const progress = clamp(units / getLapUnits(), 0, maxProgress);
   let s = progress * m.laneLength;
 
   const segTopHalf = m.halfStraight;
@@ -532,6 +888,50 @@ function getPointOnTrack(units, laneIndex){
   return { x: leftCx + s, y: cy - m.r, dx: 1, dy: 0, segment: 'home-straight' };
 }
 
+function applyRunnerLaneFit(el){
+  if(!el) return;
+  const laneWidth = trackGeom.laneWidth || 44;
+  const characterKey = el.dataset.characterKey || 'blue-racer';
+  const character = characters[characterKey] || characters['blue-racer'];
+  const sizeMultiplier = RUNNER_SCALE_MULTIPLIER_BY_CHARACTER[characterKey] || 1;
+  let runnerScale = clamp((laneWidth * RUNNER_SAFE_LANE_FRACTION) / RUNNER_BASE_SIZE, RUNNER_MIN_SCALE, RUNNER_MAX_SCALE);
+  if(character.type === 'quadruped'){
+    runnerScale *= RUNNER_QUADRUPED_SCALE;
+  }
+  if(Number.isFinite(character.scale)){
+    runnerScale = Math.min(runnerScale, character.scale);
+  }
+  runnerScale *= sizeMultiplier;
+  runnerScale = clamp(runnerScale, 0.58, RUNNER_MAX_SCALE * sizeMultiplier);
+  const shadowScale = clamp(runnerScale * 1.04, runnerScale, 1);
+  el.style.setProperty('--runner-scale', runnerScale.toFixed(3));
+  el.style.setProperty('--runner-shadow-scale', shadowScale.toFixed(3));
+  return { character, characterKey, runnerScale };
+}
+
+function getRunnerFootLanePosition(laneIndex, character){
+  const footFraction = character.type === 'quadruped'
+    ? RUNNER_QUADRUPED_FOOT_LANE_FRACTION
+    : RUNNER_BIPED_FOOT_LANE_FRACTION;
+  return clamp(laneIndex + footFraction, 0.2, LANE_COUNT - 0.04);
+}
+
+function getRunnerAnchorPoint(character, runnerScale){
+  const anchorBaseX = RUNNER_HALF_SIZE;
+  const anchorBaseY = character.type === 'quadruped'
+    ? RUNNER_QUADRUPED_FOOT_ANCHOR_Y
+    : RUNNER_BIPED_FOOT_ANCHOR_Y;
+  return {
+    x: RUNNER_HALF_SIZE + (anchorBaseX - RUNNER_HALF_SIZE) * runnerScale,
+    y: RUNNER_HALF_SIZE + (anchorBaseY - RUNNER_HALF_SIZE) * runnerScale
+  };
+}
+
+function getRunnerTrackVisualOffsetPx(characterKey){
+  const laneFraction = RUNNER_TRACK_VISUAL_OFFSET_BY_CHARACTER[characterKey] || 0;
+  return laneFraction * (trackGeom.laneWidth || 44);
+}
+
 function getJumpArcOffset(nowMs, jumpUntil){
   if(nowMs >= jumpUntil){ return 0; }
   const progress = 1 - ((jumpUntil - nowMs) / JUMP_DURATION_MS);
@@ -540,9 +940,13 @@ function getJumpArcOffset(nowMs, jumpUntil){
 
 function placeRunner(el, units, laneIndex, verticalOffset=0){
   if(!el) return;
-  const p = getPointOnTrack(units, laneIndex);
-  const x = Math.round(p.x - RUNNER_HALF_SIZE);
-  const y = Math.round(p.y - RUNNER_HALF_SIZE + verticalOffset);
+  const { character, characterKey, runnerScale } = applyRunnerLaneFit(el) || { character: characters['blue-racer'], characterKey: 'blue-racer', runnerScale: 1 };
+  const footLanePosition = getRunnerFootLanePosition(laneIndex, character);
+  const p = getPointOnTrackAtLanePosition(units, footLanePosition);
+  const anchor = getRunnerAnchorPoint(character, runnerScale);
+  const trackVisualOffsetPx = getRunnerTrackVisualOffsetPx(characterKey);
+  const x = Math.round(p.x - anchor.x);
+  const y = Math.round(p.y - anchor.y + verticalOffset + trackVisualOffsetPx);
   el.style.setProperty('--runner-flip', p.dx >= 0 ? '1' : '-1');
   const heading = (Math.atan2(p.dy, p.dx) * 180) / Math.PI;
   el.style.setProperty('--shadow-rot', `${Math.round(heading * 0.35)}deg`);
@@ -589,6 +993,7 @@ function updateRunnerAnimationState(nowMs){
     playerEl.classList.toggle('running', playerMoving);
     playerEl.classList.toggle('jumping', nowMs < playerJumpUntil);
     playerEl.classList.toggle('hurdle-hit', nowMs < playerHurdleHitUntil);
+    syncRunnerSpriteAnimation(playerEl);
   }
 
   for(const ai of aiRunners){
@@ -598,6 +1003,7 @@ function updateRunnerAnimationState(nowMs){
     el.classList.toggle('running', moving);
     el.classList.toggle('jumping', nowMs < ai.jumpUntil);
     el.classList.toggle('hurdle-hit', nowMs < ai.hurdleHitUntil);
+    syncRunnerSpriteAnimation(el);
   }
 }
 
@@ -752,20 +1158,76 @@ function buildStandings(){
   }));
 }
 
+function getProjectedFinishMs(entry, elapsedMs){
+  if(Number.isFinite(entry?.finishTimeMs)){
+    return entry.finishTimeMs;
+  }
+  if(!entry || !Number.isFinite(elapsedMs) || elapsedMs <= 900){
+    return null;
+  }
+
+  const progress = clamp(entry.pos / getLapUnits(), 0, 0.9995);
+  if(progress <= 0.02){
+    return null;
+  }
+
+  return elapsedMs / progress;
+}
+
+function updateRaceGapDisplay(nowMs){
+  if(!startTime || startTime <= 0 || !cpuHasStarted){
+    clearRaceGap();
+    return;
+  }
+
+  const elapsedMs = Math.max(0, nowMs - startTime);
+  const standings = buildStandings();
+  const playerEntry = standings.find((entry)=>entry.isPlayer);
+  const comparisonEntry = standings[0]?.isPlayer ? standings[1] : standings[0];
+  if(!playerEntry || !comparisonEntry){
+    clearRaceGap();
+    return;
+  }
+
+  const playerProjectedFinishMs = getProjectedFinishMs(playerEntry, elapsedMs);
+  const comparisonProjectedFinishMs = getProjectedFinishMs(comparisonEntry, elapsedMs);
+  if(!Number.isFinite(playerProjectedFinishMs) || !Number.isFinite(comparisonProjectedFinishMs)){
+    clearRaceGap();
+    return;
+  }
+
+  updateRaceGap(playerProjectedFinishMs - comparisonProjectedFinishMs);
+}
+
 function resetRunnerVisualStates(){
   const playerEl = document.getElementById('player');
   if(playerEl){
+    playerEl.classList.remove('running');
     playerEl.classList.remove('turbo-effect');
     playerEl.classList.remove('jumping');
     playerEl.classList.remove('hurdle-hit');
+    syncRunnerSpriteAnimation(playerEl);
   }
   for(const ai of aiRunners){
     const el = document.getElementById(ai.id);
     if(!el) continue;
+    el.classList.remove('running');
     el.classList.remove('turbo-effect');
     el.classList.remove('slipped');
     el.classList.remove('jumping');
     el.classList.remove('hurdle-hit');
+    syncRunnerSpriteAnimation(el);
+  }
+}
+
+function isFinishSequenceActive(){
+  return playerFinishTimeMs != null && finishCoastUntil > 0;
+}
+
+function setTimerToMs(ms){
+  const timer = document.getElementById('timer');
+  if(timer){
+    timer.textContent = formatTime(Math.max(0, Math.floor(ms || 0)));
   }
 }
 
@@ -774,6 +1236,7 @@ export function initializeTrackView(){
   ensureExtraRunners();
   resetAiStates();
   randomizeExtraRacerLooks();
+  applyTrackTheme(currentTrackThemeKey);
   clearPlayerTurboCooldownInterval();
   bananaUsed = false;
   bananaActive = false;
@@ -796,7 +1259,9 @@ export function startGame(){
   ensureExtraRunners();
   resetAiStates();
   randomizeExtraRacerLooks();
+  applyTrackTheme(pickNextTrackThemeKey());
   clearPlayerTurboCooldownInterval();
+  window.gameReady = false;
 
   isGameOver=false;
   isGameRunning=true;
@@ -813,6 +1278,8 @@ export function startGame(){
   playerJumpUntil=0;
   playerHurdleHitUntil=0;
   playerNextHurdleIndex=0;
+  playerFinishTimeMs=null;
+  finishCoastUntil=0;
   cpuHasStarted=false;
 
   startTime=0;
@@ -851,7 +1318,15 @@ function gameLoop(){
     accumulator-=STEP;
   }
 
-  updateTimer(startTime);
+  if(playerFinishTimeMs != null){
+    if(finishCoastUntil <= 0){
+      beginFinishCoast(now);
+    }
+    setTimerToMs(playerFinishTimeMs);
+  } else {
+    updateTimer(startTime);
+  }
+  updateRaceGapDisplay(now);
   updateStaminaUI(playerStamina);
   if(isHurdlesEvent()){
     const playerActionState = now < playerHurdleHitUntil ? 'hit' : (now < playerJumpUntil ? 'air' : 'ready');
@@ -860,10 +1335,12 @@ function gameLoop(){
   renderScene(now);
 
   if(playerFinishTimeMs != null){
-    const standings = buildStandings();
-    const winner = standings[0]?.isPlayer ? 'player' : 'cpu';
-    endGame(winner, true);
-    return;
+    if(now >= finishCoastUntil){
+      const standings = buildStandings();
+      const winner = standings[0]?.isPlayer ? 'player' : 'cpu';
+      endGame(winner, true);
+      return;
+    }
   }
 
   animationFrameId=requestAnimationFrame(gameLoop);
@@ -1004,11 +1481,11 @@ function getRaceSpeedFactorFromMeters(meters){
 }
 
 function getAiCadenceTargetFromMeters(meters){
-  if(meters <= 50){ return lerp(0.8, 0.96, meters / 50); }
-  if(meters <= 80){ return 0.95; }
-  if(meters <= 200){ return lerp(0.9, 0.8, (meters - 80) / 120); }
-  if(meters <= 300){ return lerp(0.8, 0.68, (meters - 200) / 100); }
-  return lerp(0.68, 0.58, (meters - 300) / 100);
+  if(meters <= 50){ return lerp(0.79, 0.95, meters / 50); }
+  if(meters <= 80){ return 0.94; }
+  if(meters <= 200){ return lerp(0.89, 0.79, (meters - 80) / 120); }
+  if(meters <= 300){ return lerp(0.79, 0.66, (meters - 200) / 100); }
+  return lerp(0.66, 0.54, (meters - 300) / 100);
 }
 
 function getAiCadenceByStyle(style, meters){
@@ -1128,6 +1605,43 @@ function registerAiRunTap(ai, nowMs){
   ai.stamina = computeEffectiveStamina(meters, ai.extraFatigue, ai.secondWindBoost);
 }
 
+function beginFinishCoast(nowMs){
+  if(finishCoastUntil > 0){ return; }
+  finishCoastUntil = nowMs + FINISH_COAST_MS;
+  runInputActive = false;
+  playerRunBoostUntil = 0;
+  playerTurboUntil = 0;
+  playerJumpUntil = 0;
+  clearPlayerTurboCooldownInterval();
+  for(const ai of aiRunners){
+    ai.runBoostUntil = 0;
+    ai.turboUntil = 0;
+    ai.nextTapAt = 0;
+    ai.jumpUntil = 0;
+  }
+}
+
+function stepFinishCoast(dt, nowMs){
+  const maxUnits = getLapUnits() + FINISH_COAST_OVERSHOOT_UNITS;
+  playerTapCadence = clamp(playerTapCadence - playerTapCadenceDecay * dt * 1.1, RUN_PULSE_FLOOR, 1);
+  playerSpeed = moveTowards(playerSpeed, FINISH_COAST_MIN_SPEED, FINISH_COAST_DECEL * dt);
+  playerPos = clamp(playerPos + playerSpeed * dt, 0, maxUnits);
+
+  for(const ai of aiRunners){
+    ai.tapCadence = clamp(ai.tapCadence - playerTapCadenceDecay * dt * 1.1, RUN_PULSE_FLOOR, 1);
+    ai.speed = moveTowards(ai.speed, FINISH_COAST_MIN_SPEED, FINISH_COAST_DECEL * dt);
+    if(ai.slipped){ ai.speed *= 0.72; }
+    ai.pos = clamp(ai.pos + ai.speed * dt, 0, maxUnits);
+    if(ai.slipped && nowMs > ai.slipEndTime){
+      ai.slipped = false;
+      const el = document.getElementById(ai.id);
+      if(el) el.classList.remove('slipped');
+    }
+  }
+
+  registerFinishTimes(nowMs);
+}
+
 function scheduleAiNextTap(ai, nowMs){
   const meters = metersFromUnits(ai.pos);
   const cadenceTarget = clamp(getAiCadenceByStyle(ai.style, meters) + ai.styleVariance, 0.42, 0.99);
@@ -1137,6 +1651,11 @@ function scheduleAiNextTap(ai, nowMs){
 }
 
 function step(dt, nowMs){
+  if(isFinishSequenceActive()){
+    stepFinishCoast(dt, nowMs);
+    return;
+  }
+
   const playerMeters = metersFromUnits(playerPos);
   playerSecondWindBoost = clamp(playerSecondWindBoost - SECOND_WIND_DECAY_PER_SECOND * dt, 0, 1);
   playerStamina = computeEffectiveStamina(playerMeters, playerExtraFatigue, playerSecondWindBoost);
@@ -1229,14 +1748,19 @@ function step(dt, nowMs){
   }
 
   registerFinishTimes(nowMs);
+  if(playerFinishTimeMs != null){
+    beginFinishCoast(nowMs);
+  }
 }
 
 export function endGame(winner, playerFinished){
   isGameRunning=false;
   isGameOver=true;
+  finishCoastUntil=0;
   runInputActive=false;
   playerRunBoostUntil=0;
   clearPlayerTurboCooldownInterval();
+  resetRunnerVisualStates();
   if(animationFrameId){ cancelAnimationFrame(animationFrameId); animationFrameId=0; }
   const ms=(playerFinishTimeMs != null)
     ? playerFinishTimeMs
@@ -1256,6 +1780,7 @@ export function endGame(winner, playerFinished){
 export function cancelRace(){
   isGameRunning = false;
   isGameOver = false;
+  finishCoastUntil = 0;
   cpuHasStarted = false;
   runInputActive = false;
   startTime = 0;
@@ -1284,7 +1809,7 @@ function startComputerIfNeeded(){
 function startTimerIfNeeded(){ if(!startTime||startTime<=0){ startTime=performance.now(); } }
 
 export function onRunPress(){
-  if(isGameOver) return;
+  if(isGameOver || isFinishSequenceActive()) return;
   if(!isGameRunning){
     if(window.gameReady===true){ startGame(); }
     else { return; }
@@ -1299,7 +1824,7 @@ export function onRunRelease(){ runInputActive=false; }
 
 export function activateTurbo(){
   if(isHurdlesEvent()) return;
-  if(isGameOver) return;
+  if(isGameOver || isFinishSequenceActive()) return;
   if(!isGameRunning){
     if(window.gameReady===true){ startGame(); }
     else { return; }
@@ -1332,7 +1857,7 @@ export function activateTurbo(){
 
 export function activateJump(){
   if(!isHurdlesEvent()) return;
-  if(isGameOver) return;
+  if(isGameOver || isFinishSequenceActive()) return;
   if(!isGameRunning){
     if(window.gameReady===true){ startGame(); }
     else { return; }

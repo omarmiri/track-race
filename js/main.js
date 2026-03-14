@@ -6,6 +6,7 @@ import { DEFAULT_EVENT_ID, getRaceEventMeta, normalizeEventId } from './events.j
 import { refreshControlsHint, wireGamepad, wireKeyboard, wireMobileButtons, wireMobileViewport, wireTouch } from './input.js';
 import {
   closeHighScoresModal,
+  ensureVisitorId,
   initializeHighScores,
   renderResultsBestTimes,
   saveHighScore,
@@ -13,6 +14,8 @@ import {
   showHighScoresModal,
   toggleModalScoreView
 } from './highscores.js';
+import { addCoins, getCoinRewardForPlace, getCoins, spendCoins } from './coins.js';
+import { getUnlockPrice, isCharacterUnlocked, unlockCharacter } from './unlocks.js';
 import { setSecondaryActionType } from './ui.js';
 
 function ordinal(place){
@@ -88,9 +91,14 @@ function init(){
   const finalRaceTime = document.getElementById('final-race-time');
   const racePerkWrap = document.getElementById('race-perk-wrap');
   const racePerkPicker = document.getElementById('race-perk-picker');
+  const racePerkBalance = document.getElementById('race-perk-balance');
+  const coinsCount = document.getElementById('coins-count');
+  const characterBalance = document.getElementById('character-balance');
+  const characterNote = document.getElementById('character-note');
 
   updateSpeedConstants();
   window.gameReady = false;
+  ensureVisitorId();
 
   if(backBtn){
     backBtn.addEventListener('click', ()=>{
@@ -98,10 +106,14 @@ function init(){
     });
   }
 
+  const DASH_PERK_COST = 2;
+  const DEFAULT_CHARACTER_NOTE = 'Select your character or unlock a new racer.';
   let currentEventId = DEFAULT_EVENT_ID;
+  let currentPlayerSelectionKey = 'blue-racer';
   let currentPlayerKey = 'blue-racer';
   let currentOpponentKey = 'red-racer';
-  let currentRacePerk = 'speed';
+  let currentRacePerk = 'none';
+  let currentCoins = getCoins();
 
   const pickOpponentFor = (key)=>{
     if(key === 'blue-racer') return 'red-racer';
@@ -111,13 +123,25 @@ function init(){
   };
 
   const pickRandomPlayer = ()=>{
-    const keys = Object.keys(characters).filter((key)=>key !== 'mystery');
+    const keys = Object.keys(characters).filter((key)=>key !== 'mystery' && isCharacterUnlocked(key));
     return keys[Math.floor(Math.random() * keys.length)] || 'blue-racer';
   };
 
   const setVisible = (el, visible)=>{
     if(!el) return;
     el.classList.toggle('hidden', !visible);
+  };
+
+  const setCharacterNote = (text, tone='default')=>{
+    if(!characterNote){
+      return;
+    }
+    characterNote.textContent = text;
+    characterNote.className = tone === 'warning'
+      ? 'text-yellow-200 text-sm mb-2'
+      : tone === 'success'
+        ? 'text-green-200 text-sm mb-2'
+        : 'text-white text-sm mb-2 opacity-80';
   };
 
   const setStartButton = (mode)=>{
@@ -131,26 +155,94 @@ function init(){
     startBtn.className = 'px-4 py-3 text-xs sm:text-sm font-bold rounded bg-yellow-300 text-black';
   };
 
-  const setRacePerkSelection = (perk)=>{
-    currentRacePerk = (perk === 'turbo') ? 'turbo' : 'speed';
-    setPlayerRacePerk(currentRacePerk);
-    if(racePerkPicker){
-      Array.from(racePerkPicker.querySelectorAll('.race-perk-btn')).forEach((btn)=>{
-        const selected = btn.getAttribute('data-perk') === currentRacePerk;
-        btn.classList.toggle('is-selected', selected);
-      });
+  const renderCoinBalances = ()=>{
+    if(coinsCount){
+      coinsCount.textContent = String(currentCoins);
+    }
+    if(racePerkBalance){
+      racePerkBalance.textContent = `Coins: ${currentCoins}`;
+    }
+    if(characterBalance){
+      characterBalance.textContent = `Coins: ${currentCoins}`;
     }
   };
 
+  const appendCharacterStatusLine = (container, text, className)=>{
+    const line = document.createElement('div');
+    line.className = className;
+    line.textContent = text;
+    container.appendChild(line);
+  };
+
+  const renderCharacterButtons = ()=>{
+    if(!charGrid){
+      return;
+    }
+    Array.from(charGrid.querySelectorAll('.character-btn')).forEach((button)=>{
+      const key = button.getAttribute('data-char') || '';
+      const unlockPrice = getUnlockPrice(key);
+      const unlocked = isCharacterUnlocked(key);
+      const canUnlock = !unlocked && unlockPrice > 0 && currentCoins >= unlockPrice;
+
+      button.classList.toggle('is-locked', !unlocked);
+      button.classList.toggle('can-unlock', canUnlock);
+
+      let status = button.querySelector('.character-status');
+      if(!status){
+        status = document.createElement('div');
+        status.className = 'character-status';
+        button.appendChild(status);
+      }
+      status.replaceChildren();
+
+      if(key === 'mystery'){
+        appendCharacterStatusLine(status, 'Random unlocked', 'character-status-label');
+        return;
+      }
+
+      if(unlocked){
+        appendCharacterStatusLine(status, unlockPrice > 0 ? 'Unlocked' : 'Starter', 'character-status-label');
+        return;
+      }
+
+      appendCharacterStatusLine(status, 'Unlock', 'character-status-label');
+      appendCharacterStatusLine(status, `${unlockPrice} coins`, 'character-status-price');
+    });
+  };
+
+  const renderRacePerkButtons = ()=>{
+    if(!racePerkPicker){
+      return;
+    }
+    const perkSelectable = getRaceEventMeta(currentEventId).allowsPerks && currentCoins >= DASH_PERK_COST;
+    Array.from(racePerkPicker.querySelectorAll('.race-perk-btn')).forEach((btn)=>{
+      const perk = btn.getAttribute('data-perk') || 'none';
+      const selected = perk === currentRacePerk;
+      btn.classList.toggle('is-selected', selected);
+      btn.classList.toggle('is-disabled', !perkSelectable);
+      btn.disabled = !perkSelectable;
+      btn.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+  };
+
+  const setRacePerkSelection = (perk)=>{
+    currentRacePerk = (perk === 'turbo' || perk === 'speed') ? perk : 'none';
+    setPlayerRacePerk(currentRacePerk);
+    renderRacePerkButtons();
+  };
+
   const applySelection = (key)=>{
-    const resolved = (key === 'mystery') ? pickRandomPlayer() : key;
+    const selectionKey = characters[key] ? key : 'blue-racer';
+    const resolved = (selectionKey === 'mystery') ? pickRandomPlayer() : selectionKey;
+    currentPlayerSelectionKey = selectionKey;
     currentPlayerKey = resolved;
     currentOpponentKey = pickOpponentFor(resolved);
     document.querySelectorAll('#character-grid .character-btn').forEach((button)=>button.classList.remove('selected'));
-    const selected = document.querySelector(`#character-grid .character-btn[data-char="${key}"]`);
+    const selected = document.querySelector(`#character-grid .character-btn[data-char="${selectionKey}"]`);
     if(selected) selected.classList.add('selected');
     if(playerPreview) renderCharacterThumbnail(playerPreview, currentPlayerKey);
     if(computerPreview) renderCharacterThumbnail(computerPreview, currentOpponentKey);
+    renderCharacterButtons();
   };
 
   const setEventSelection = (eventId)=>{
@@ -168,6 +260,7 @@ function init(){
         button.classList.toggle('is-selected', selected);
       });
     }
+    renderRacePerkButtons();
   };
 
   const openEventPicker = ()=>{
@@ -185,14 +278,50 @@ function init(){
       cancelRace();
     }
     window.gameReady = false;
-    applySelection(currentPlayerKey);
+    renderCoinBalances();
+    setCharacterNote(DEFAULT_CHARACTER_NOTE);
+    applySelection(currentPlayerSelectionKey);
     if(eventModal) eventModal.classList.add('hidden');
     if(gameModal) gameModal.classList.add('hidden');
     if(charModal) charModal.classList.remove('hidden');
   };
 
+  const handleCharacterChoice = (key)=>{
+    const characterKey = characters[key] ? key : 'blue-racer';
+    const unlockPrice = getUnlockPrice(characterKey);
+    const unlocked = isCharacterUnlocked(characterKey);
+    const characterName = (characters[characterKey] && characters[characterKey].name) || 'Racer';
+
+    if(!unlocked){
+      if(currentCoins < unlockPrice){
+        setCharacterNote(`Need ${unlockPrice} coins to unlock ${characterName}.`, 'warning');
+        renderCharacterButtons();
+        return;
+      }
+
+      const didSpendCoins = spendCoins(unlockPrice);
+      currentCoins = getCoins();
+      renderCoinBalances();
+      if(!didSpendCoins){
+        setCharacterNote(`Need ${unlockPrice} coins to unlock ${characterName}.`, 'warning');
+        renderCharacterButtons();
+        return;
+      }
+
+      unlockCharacter(characterKey);
+      setCharacterNote(`${characterName} unlocked!`, 'success');
+      renderCharacterButtons();
+    }
+
+    applySelection(characterKey);
+    if(charModal) charModal.classList.add('hidden');
+    openPreRaceModal();
+  };
+
   const openPreRaceModal = ()=>{
     const meta = getRaceEventMeta(currentEventId);
+    setRacePerkSelection('none');
+    renderCoinBalances();
     if(modalTitle){
       modalTitle.textContent = meta.name;
       modalTitle.className = 'text-sm sm:text-lg font-bold text-yellow-300 mb-1 text-center';
@@ -210,6 +339,7 @@ function init(){
     setVisible(resultsStack, false);
     setVisible(racePerkWrap, meta.allowsPerks);
     setVisible(controlsHint, true);
+    renderRacePerkButtons();
     if(gameModal){ gameModal.classList.remove('results-open'); }
     if(eventModal) eventModal.classList.add('hidden');
     if(charModal) charModal.classList.add('hidden');
@@ -222,6 +352,10 @@ function init(){
     const playerEntry = standings.find((entry)=>entry.isPlayer) || null;
     const playerWon = playerEntry ? playerEntry.place === 1 : false;
     const placingText = playerEntry ? ordinal(playerEntry.place) : 'finished';
+    const rewardCoins = playerEntry ? getCoinRewardForPlace(playerEntry.place) : 0;
+    const rewardText = rewardCoins > 0
+      ? ` Earned ${rewardCoins} coin${rewardCoins === 1 ? '' : 's'}.`
+      : '';
 
     if(modalTitle){
       modalTitle.textContent = meta.resultTitle;
@@ -229,12 +363,14 @@ function init(){
       modalTitle.style.textShadow = '2px 2px #000';
     }
     if(modalText){
-      modalText.textContent = `${playerWon ? 'You won.' : 'You lost.'} Finished ${placingText}.`;
+      modalText.textContent = `${playerWon ? 'You won.' : 'You lost.'} Finished ${placingText}.${rewardText}`;
       modalText.className = 'text-xs sm:text-sm text-white mb-1 text-center px-2 opacity-95';
     }
     if(finalRaceTime){
       finalRaceTime.textContent = (ms / 1000).toFixed(2) + 's';
     }
+    setRacePerkSelection('none');
+    renderCoinBalances();
     setStartButton('results');
     setVisible(raceTimeDisplay, true);
     setVisible(resultsStack, true);
@@ -244,11 +380,14 @@ function init(){
     if(charModal) charModal.classList.add('hidden');
     if(gameModal){ gameModal.classList.add('results-open'); }
     if(gameModal) gameModal.classList.remove('hidden');
+    window.gameReady = false;
   };
 
   updateRunnerAppearance(playerEl, currentPlayerKey);
   updateRunnerAppearance(computerEl, currentOpponentKey);
-  applySelection(currentPlayerKey);
+  applySelection(currentPlayerSelectionKey);
+  renderCoinBalances();
+  setCharacterNote(DEFAULT_CHARACTER_NOTE);
   setRacePerkSelection(currentRacePerk);
   setEventSelection(currentEventId);
   updateCrowdSignText('GO RACER');
@@ -259,6 +398,7 @@ function init(){
   wireMobileButtons();
   wireMobileViewport();
   window.initializeHighScores = initializeHighScores;
+  initializeHighScores();
 
   if(scoresBtn){
     scoresBtn.addEventListener('click', async ()=>{
@@ -291,8 +431,7 @@ function init(){
       const key = button.getAttribute('data-char');
       if(!key) return;
       applySelection(key);
-      if(charModal) charModal.classList.add('hidden');
-      openPreRaceModal();
+      handleCharacterChoice(key);
     });
   }
 
@@ -300,9 +439,9 @@ function init(){
     racePerkPicker.dataset.bound = '1';
     racePerkPicker.addEventListener('click', (e)=>{
       const button = (e.target instanceof Element) ? e.target.closest('.race-perk-btn') : null;
-      if(!button) return;
+      if(!button || button.disabled) return;
       const perk = button.getAttribute('data-perk');
-      setRacePerkSelection(perk || 'speed');
+      setRacePerkSelection(perk === currentRacePerk ? 'none' : (perk || 'none'));
     });
   }
 
@@ -321,8 +460,7 @@ function init(){
 
     if(inCharacterSelect && enter){
       e.preventDefault();
-      if(charModal) charModal.classList.add('hidden');
-      openPreRaceModal();
+      handleCharacterChoice(currentPlayerSelectionKey);
     }
   });
 
@@ -391,8 +529,7 @@ function init(){
             const key = el && el.getAttribute('data-char');
             if(key) applySelection(key);
             if(btns.a && !prev.a){
-              if(charModal) charModal.classList.add('hidden');
-              openPreRaceModal();
+              handleCharacterChoice(key || currentPlayerSelectionKey);
             }
             if(btns.b && !prev.b){
               openEventPicker();
@@ -426,6 +563,20 @@ function init(){
     startBtn.dataset.bound = '1';
     startBtn.addEventListener('click', (e)=>{
       e.stopPropagation();
+      if(currentEventId === DEFAULT_EVENT_ID && currentRacePerk !== 'none'){
+        const didSpendCoins = spendCoins(DASH_PERK_COST);
+        currentCoins = getCoins();
+        renderCoinBalances();
+        if(!didSpendCoins){
+          setRacePerkSelection('none');
+          if(modalText){
+            modalText.textContent = `You need ${DASH_PERK_COST} coins to use a race perk.`;
+            modalText.className = 'text-xs sm:text-sm text-white mb-1 text-center px-2 opacity-95';
+          }
+          return;
+        }
+        renderRacePerkButtons();
+      }
       updateRunnerAppearance(playerEl, currentPlayerKey);
       updateRunnerAppearance(computerEl, currentOpponentKey);
       const playerName = (characters[currentPlayerKey] && characters[currentPlayerKey].name) || 'Racer';
@@ -434,7 +585,7 @@ function init(){
       setScoreEvent(currentEventId);
       setPlayerRacePerk(currentRacePerk);
       if(gameModal) gameModal.classList.add('hidden');
-      window.gameReady = true;
+      window.gameReady = false;
       startGame();
     });
   }
@@ -443,6 +594,10 @@ function init(){
     const ms = ev.detail?.timeMs || 0;
     const playerFinished = !!ev.detail?.playerFinished;
     const standings = ev.detail?.standings || [];
+    const playerEntry = standings.find((entry)=>entry.isPlayer) || null;
+    const rewardCoins = playerFinished && playerEntry ? getCoinRewardForPlace(playerEntry.place) : 0;
+    currentCoins = rewardCoins > 0 ? addCoins(rewardCoins) : getCoins();
+    renderCoinBalances();
     if(playerFinished){
       await saveHighScore(ms, currentEventId);
     }

@@ -30,7 +30,7 @@ You race against 5 AI runners, manage stamina, trigger turbo at the right moment
 - HTML + Tailwind utility classes
 - Custom CSS animations/layout
 - Supabase JS client (CDN)
-- FingerprintJS (visitor identity)
+- Locally generated visitor ID stored on the device/browser for high scores
 - Google Analytics (`gtag`)
 
 ## Project Structure
@@ -83,6 +83,8 @@ npx serve .
 
 - `window.SUPABASE_URL`
 - `window.SUPABASE_ANON_KEY`
+
+High score submissions use a locally generated `visitorId` persisted on the device/browser.
 
 `js/highscores.js` writes/read scores from:
 

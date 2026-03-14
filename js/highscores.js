@@ -7,6 +7,7 @@ let lastStatus = { offline: false, error: false };
 let resultsShowingGlobal = false;
 let currentScoreEvent = DEFAULT_EVENT_ID;
 let supabaseClient = null;
+const VISITOR_ID_STORAGE_KEY = 'track-race:visitor-id';
 
 function hasSupabase(){
   return typeof window.supabase !== 'undefined' &&
@@ -32,8 +33,70 @@ function createClient(){
   }
 }
 
+function readStoredVisitorId(){
+  try{
+    return localStorage.getItem(VISITOR_ID_STORAGE_KEY) || '';
+  }catch(e){
+    return '';
+  }
+}
+
+function writeStoredVisitorId(visitorId){
+  if(!visitorId) return;
+  try{
+    localStorage.setItem(VISITOR_ID_STORAGE_KEY, visitorId);
+  }catch(e){}
+}
+
+function generateVisitorId(){
+  if(typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'){
+    return `trackrace_${crypto.randomUUID()}`;
+  }
+
+  if(typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'){
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, (byte)=>byte.toString(16).padStart(2, '0')).join('');
+    return `trackrace_${hex}`;
+  }
+
+  return `trackrace_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function getNativeVisitorId(){
+  try{
+    if(window.AndroidBridge && typeof window.AndroidBridge.getVisitorId === 'function'){
+      return window.AndroidBridge.getVisitorId() || '';
+    }
+  }catch(e){}
+  return '';
+}
+
 function visitor(){
-  return window.visitorId || '';
+  if(window.visitorId){
+    return window.visitorId;
+  }
+
+  const nativeVisitorId = getNativeVisitorId();
+  if(nativeVisitorId){
+    window.visitorId = nativeVisitorId;
+    return nativeVisitorId;
+  }
+
+  const storedVisitorId = readStoredVisitorId();
+  if(storedVisitorId){
+    window.visitorId = storedVisitorId;
+    return storedVisitorId;
+  }
+
+  const generatedVisitorId = generateVisitorId();
+  window.visitorId = generatedVisitorId;
+  writeStoredVisitorId(generatedVisitorId);
+  return generatedVisitorId;
+}
+
+export function ensureVisitorId(){
+  return visitor();
 }
 
 function getScoreMeta(eventId=currentScoreEvent){
