@@ -1,7 +1,7 @@
 import { characters, updateRunnerAppearance, renderCharacterThumbnail } from './characters.js';
 import { initCrowdAnimation, updateCrowdSignText } from './crowd.js';
 import { updateSpeedConstants } from './speed.js';
-import { cancelRace, initializeTrackView, isRaceActive, setPlayerRacePerk, setRaceEvent, startGame } from './game.js';
+import { cancelRace, initializeTrackView, isRaceActive, setPlayerRacePerk, setRaceEvent, setRacePaused, startGame } from './game.js';
 import { DEFAULT_EVENT_ID, getRaceEventMeta, normalizeEventId } from './events.js';
 import { refreshControlsHint, wireGamepad, wireKeyboard, wireMobileButtons, wireMobileViewport, wireTouch } from './input.js';
 import {
@@ -69,6 +69,7 @@ function init(){
   const scoresBtn = document.getElementById('scores-btn');
   const changeEventBtn = document.getElementById('change-event-btn');
   const changeBtnHeader = document.getElementById('change-character-header-btn');
+  const coinsPill = document.getElementById('coins-pill');
   const playerEl = document.getElementById('player');
   const computerEl = document.getElementById('computer');
   const changeBtn = document.getElementById('change-character-btn');
@@ -93,6 +94,11 @@ function init(){
   const racePerkPicker = document.getElementById('race-perk-picker');
   const racePerkBalance = document.getElementById('race-perk-balance');
   const coinsCount = document.getElementById('coins-count');
+  const coinsMenuModal = document.getElementById('coins-menu-modal');
+  const coinsMenuBalance = document.getElementById('coins-menu-balance');
+  const coinsMenuNote = document.getElementById('coins-menu-note');
+  const coinsMenuPerks = document.getElementById('coins-menu-perks');
+  const coinsMenuCloseBtn = document.getElementById('coins-menu-close-btn');
   const characterBalance = document.getElementById('character-balance');
   const characterNote = document.getElementById('character-note');
 
@@ -154,10 +160,25 @@ function init(){
     startBtn.textContent = 'Start Race';
     startBtn.className = 'px-4 py-3 text-xs sm:text-sm font-bold rounded bg-yellow-300 text-black';
   };
+  const setCoinsPillEnabled = (enabled)=>{
+    if(!coinsPill){
+      return;
+    }
+    const isEnabled = !!enabled;
+    coinsPill.disabled = !isEnabled;
+    coinsPill.classList.toggle('is-disabled', !isEnabled);
+    coinsPill.setAttribute('aria-disabled', isEnabled ? 'false' : 'true');
+    if(!isEnabled && coinsMenuModal && !coinsMenuModal.classList.contains('hidden')){
+      closeCoinsMenu();
+    }
+  };
 
   const renderCoinBalances = ()=>{
     if(coinsCount){
       coinsCount.textContent = String(currentCoins);
+    }
+    if(coinsMenuBalance){
+      coinsMenuBalance.textContent = `Coins: ${currentCoins}`;
     }
     if(racePerkBalance){
       racePerkBalance.textContent = `Coins: ${currentCoins}`;
@@ -230,6 +251,76 @@ function init(){
     setPlayerRacePerk(currentRacePerk);
     renderRacePerkButtons();
   };
+  const getPerkLabel = (perk)=>perk === 'speed' ? '+Speed' : 'Sprint 4s CD';
+  const renderCoinsMenu = (noteOverride='')=>{
+    renderCoinBalances();
+    if(!coinsMenuPerks || !coinsMenuNote){
+      return;
+    }
+    const dashPerksAvailable = currentEventId === DEFAULT_EVENT_ID;
+    const hasActivePerk = currentRacePerk !== 'none';
+    const canBuyPerk = dashPerksAvailable && !hasActivePerk && currentCoins >= DASH_PERK_COST;
+
+    if(noteOverride){
+      coinsMenuNote.textContent = noteOverride;
+    } else if(!dashPerksAvailable){
+      coinsMenuNote.textContent = 'Perks are only available in 400m Dash.';
+    } else if(hasActivePerk){
+      coinsMenuNote.textContent = `${getPerkLabel(currentRacePerk)} is already active for this race.`;
+    } else if(currentCoins < DASH_PERK_COST){
+      coinsMenuNote.textContent = `You need ${DASH_PERK_COST} coins to buy a perk.`;
+    } else {
+      coinsMenuNote.textContent = `Spend ${DASH_PERK_COST} coins to activate one perk for this race.`;
+    }
+
+    Array.from(coinsMenuPerks.querySelectorAll('.race-perk-btn')).forEach((btn)=>{
+      const perk = btn.getAttribute('data-perk') || 'none';
+      const selected = perk === currentRacePerk;
+      const price = btn.querySelector('.race-perk-price');
+      btn.classList.toggle('is-selected', selected);
+      btn.classList.toggle('is-disabled', !selected && !canBuyPerk);
+      btn.disabled = !canBuyPerk;
+      btn.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      if(price){
+        price.textContent = selected ? 'Active' : `${DASH_PERK_COST} coins`;
+      }
+    });
+  };
+  const closeCoinsMenu = ()=>{
+    if(coinsMenuModal){
+      coinsMenuModal.classList.add('hidden');
+    }
+    setRacePaused(false);
+  };
+  const openCoinsMenu = ()=>{
+    if(!isRaceActive()){
+      return;
+    }
+    renderCoinsMenu();
+    setRacePaused(true);
+    if(coinsMenuModal){
+      coinsMenuModal.classList.remove('hidden');
+    }
+  };
+  const purchaseRacePerkFromCoinsMenu = (perk)=>{
+    if(currentEventId !== DEFAULT_EVENT_ID){
+      renderCoinsMenu('Perks are only available in 400m Dash.');
+      return;
+    }
+    if(currentRacePerk !== 'none'){
+      renderCoinsMenu(`${getPerkLabel(currentRacePerk)} is already active for this race.`);
+      return;
+    }
+    const didSpendCoins = spendCoins(DASH_PERK_COST);
+    currentCoins = getCoins();
+    renderCoinBalances();
+    if(!didSpendCoins){
+      renderCoinsMenu(`You need ${DASH_PERK_COST} coins to buy a perk.`);
+      return;
+    }
+    setRacePerkSelection(perk);
+    renderCoinsMenu(`${getPerkLabel(perk)} activated for this race. Tap Back to Race to continue.`);
+  };
 
   const applySelection = (key)=>{
     const selectionKey = characters[key] ? key : 'blue-racer';
@@ -264,6 +355,8 @@ function init(){
   };
 
   const openEventPicker = ()=>{
+    closeCoinsMenu();
+    setCoinsPillEnabled(false);
     if(isRaceActive()){
       cancelRace();
     }
@@ -274,6 +367,8 @@ function init(){
   };
 
   const openCharacterPicker = ()=>{
+    closeCoinsMenu();
+    setCoinsPillEnabled(false);
     if(isRaceActive()){
       cancelRace();
     }
@@ -319,6 +414,8 @@ function init(){
   };
 
   const openPreRaceModal = ()=>{
+    closeCoinsMenu();
+    setCoinsPillEnabled(true);
     const meta = getRaceEventMeta(currentEventId);
     setRacePerkSelection('none');
     renderCoinBalances();
@@ -348,6 +445,8 @@ function init(){
   };
 
   const openResultsModal = (ms, standings)=>{
+    closeCoinsMenu();
+    setCoinsPillEnabled(true);
     const meta = getRaceEventMeta(currentEventId);
     const playerEntry = standings.find((entry)=>entry.isPlayer) || null;
     const playerWon = playerEntry ? playerEntry.place === 1 : false;
@@ -387,6 +486,7 @@ function init(){
   updateRunnerAppearance(computerEl, currentOpponentKey);
   applySelection(currentPlayerSelectionKey);
   renderCoinBalances();
+  setCoinsPillEnabled(false);
   setCharacterNote(DEFAULT_CHARACTER_NOTE);
   setRacePerkSelection(currentRacePerk);
   setEventSelection(currentEventId);
@@ -405,12 +505,40 @@ function init(){
       showHighScoresModal(currentEventId);
     });
   }
+  if(coinsPill){
+    coinsPill.addEventListener('click', ()=>{
+      if(coinsMenuModal && !coinsMenuModal.classList.contains('hidden')){
+        closeCoinsMenu();
+        return;
+      }
+      openCoinsMenu();
+    });
+  }
   if(changeEventBtn){ changeEventBtn.addEventListener('click', openEventPicker); }
   if(changeBtnHeader){ changeBtnHeader.addEventListener('click', openCharacterPicker); }
   if(changeBtn){ changeBtn.addEventListener('click', openCharacterPicker); }
   if(changeFooterBtn){ changeFooterBtn.addEventListener('click', openCharacterPicker); }
   if(modalClose){ modalClose.addEventListener('click', closeHighScoresModal); }
   if(modalToggle){ modalToggle.addEventListener('click', toggleModalScoreView); }
+  if(coinsMenuCloseBtn){
+    coinsMenuCloseBtn.addEventListener('click', closeCoinsMenu);
+  }
+  if(coinsMenuModal){
+    coinsMenuModal.addEventListener('click', (e)=>{
+      if(e.target === coinsMenuModal){
+        closeCoinsMenu();
+      }
+    });
+  }
+  if(coinsMenuPerks){
+    coinsMenuPerks.addEventListener('click', (e)=>{
+      const button = (e.target instanceof Element) ? e.target.closest('.race-perk-btn') : null;
+      if(!button) return;
+      const perk = button.getAttribute('data-perk');
+      if(!perk) return;
+      purchaseRacePerkFromCoinsMenu(perk);
+    });
+  }
 
   if(eventGrid && !eventGrid.dataset.bound){
     eventGrid.dataset.bound = '1';
@@ -604,6 +732,9 @@ function init(){
     renderPodium(standings);
     await renderResultsBestTimes(currentEventId);
     openResultsModal(ms, standings);
+  });
+  document.addEventListener('raceStarted', ()=>{
+    setCoinsPillEnabled(false);
   });
 
   openEventPicker();

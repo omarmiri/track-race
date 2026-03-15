@@ -468,6 +468,13 @@ button {
   border-radius: 999px;
 }
 
+#coins-pill.is-disabled {
+  opacity: 0.55;
+  filter: saturate(0.75);
+  cursor: default;
+  box-shadow: none;
+}
+
 #edit-controls-btn.is-active {
   background: #fde047;
   color: #5b4600;
@@ -512,6 +519,57 @@ button {
   text-align: center;
 }
 
+#controls-size-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem 0.8rem;
+}
+
+.controls-size-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.18);
+}
+
+.controls-size-label {
+  color: #e2e8f0;
+  font-size: 0.58rem;
+  min-width: 74px;
+  text-align: left;
+}
+
+.controls-size-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.controls-size-btn {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: #dbeafe;
+  color: #102327;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 2px 0 rgba(12, 24, 42, 0.25);
+  pointer-events: auto;
+}
+
+.controls-size-value {
+  min-width: 50px;
+  color: #fde68a;
+  font-size: 0.58rem;
+  text-align: center;
+}
+
 #controls-edit-actions {
   display: flex;
   align-items: center;
@@ -536,11 +594,13 @@ button {
 }
 
 #mobile-controls .mobile-control-pad {
+  --control-scale: 1;
   position: absolute;
   display: flex;
   left: 0;
   top: 0;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--control-scale));
+  transform-origin: center center;
   pointer-events: none;
   z-index: 1;
 }
@@ -702,6 +762,15 @@ button {
     font-size: 0.56rem;
   }
 
+  #controls-size-panel {
+    gap: 0.4rem 0.6rem;
+  }
+
+  .controls-size-label,
+  .controls-size-value {
+    font-size: 0.54rem;
+  }
+
   #controls-edit-actions button {
     min-width: 82px;
     font-size: 0.64rem;
@@ -739,6 +808,11 @@ button {
 
   #controls-edit-panel {
     max-width: min(94vw, 420px);
+  }
+
+  .controls-size-row {
+    width: 100%;
+    justify-content: space-between;
   }
 
   #track-area {
@@ -1338,6 +1412,85 @@ button {
     letter-spacing: 0 !important;
     font-size: 0.62rem !important;
     line-height: 1 !important;
+  }
+}
+
+/* iPhone/iPad footer sizing: reserve more room for "Change Character" on results screens. */
+#start-button {
+  width: 156px !important;
+  min-width: 156px !important;
+  max-width: 156px !important;
+}
+
+#change-character-footer-btn {
+  width: 204px !important;
+  min-width: 204px !important;
+  max-width: 204px !important;
+  padding-left: 0.7rem !important;
+  padding-right: 0.7rem !important;
+}
+
+#game-modal.results-open #change-character-footer-btn {
+  width: 216px !important;
+  min-width: 216px !important;
+  max-width: 216px !important;
+  overflow: visible !important;
+}
+
+@media (max-width: 768px) {
+  #modal-footer {
+    gap: 0.45rem !important;
+  }
+
+  #start-button {
+    width: min(36vw, 152px) !important;
+    min-width: min(36vw, 152px) !important;
+    max-width: min(36vw, 152px) !important;
+  }
+
+  #change-character-footer-btn {
+    width: min(54vw, 204px) !important;
+    min-width: min(54vw, 204px) !important;
+    max-width: min(54vw, 204px) !important;
+    font-size: 0.6rem !important;
+    letter-spacing: -0.01em !important;
+  }
+
+  #game-modal.results-open #change-character-footer-btn {
+    width: min(58vw, 218px) !important;
+    min-width: min(58vw, 218px) !important;
+    max-width: min(58vw, 218px) !important;
+    white-space: normal !important;
+    line-height: 1.12 !important;
+    text-align: center !important;
+    padding-top: 0.6rem !important;
+    padding-bottom: 0.6rem !important;
+    overflow: visible !important;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 720px) {
+  #modal-footer {
+    grid-template-columns: 0.82fr 1.18fr !important;
+  }
+
+  #change-character-footer-btn {
+    font-size: 0.58rem !important;
+    padding-left: 0.45rem !important;
+    padding-right: 0.45rem !important;
+  }
+
+  #game-modal.results-open #modal-footer {
+    grid-template-columns: 0.8fr 1.2fr !important;
+  }
+
+  #game-modal.results-open #change-character-footer-btn {
+    font-size: 0.55rem !important;
+    line-height: 1.08 !important;
+    padding-left: 0.42rem !important;
+    padding-right: 0.42rem !important;
+    white-space: normal !important;
+    overflow: visible !important;
   }
 }
 

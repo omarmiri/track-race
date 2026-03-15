@@ -66,11 +66,14 @@ let runInputActive=false;
 let playerTurboUntil=0;
 let playerRacePerk='none';
 let playerTurboCooldownMs=TURBO_COOLDOWN;
+let playerTurboCooldownEndsAt=0;
 let playerJumpUntil=0;
 let playerHurdleHitUntil=0;
 let playerNextHurdleIndex=0;
 let playerFinishTimeMs=null;
 let finishCoastUntil=0;
+let racePaused=false;
+let pauseStartedAt=0;
 
 let cpuHasStarted=false;
 let aiRunners=[];
@@ -298,9 +301,29 @@ function clearPlayerTurboCooldownInterval(){
   }
 }
 
+function syncPlayerTurboCooldownInterval(){
+  clearPlayerTurboCooldownInterval();
+  if(isTurboReady || playerTurboCooldownEndsAt <= 0){
+    return;
+  }
+  const tick = ()=>{
+    const remainingMs = Math.max(0, playerTurboCooldownEndsAt - performance.now());
+    const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
+    updateTurboUI(false, remainingSec);
+    if(remainingMs <= 0){
+      clearPlayerTurboCooldownInterval();
+      isTurboReady = true;
+      playerTurboCooldownEndsAt = 0;
+      updateTurboUI(true, 0);
+    }
+  };
+  tick();
+  playerTurboCooldownIntervalId = setInterval(tick, 250);
+}
+
 export function setPlayerRacePerk(perk){
   playerRacePerk = (perk === 'turbo' || perk === 'speed') ? perk : 'none';
-  playerTurboCooldownMs = playerRacePerk === 'turbo' ? FAST_TURBO_COOLDOWN_MS : TURBO_COOLDOWN;
+  applyPlayerRaceTuning();
 }
 
 export function setRaceEvent(eventId){
@@ -317,11 +340,43 @@ export function isRaceActive(){
   return isGameRunning && !isGameOver;
 }
 
+export function setRacePaused(paused){
+  if(!isGameRunning || isGameOver){
+    racePaused = false;
+    pauseStartedAt = 0;
+    return;
+  }
+  const shouldPause = !!paused;
+  if(shouldPause === racePaused){
+    return;
+  }
+  if(shouldPause){
+    racePaused = true;
+    pauseStartedAt = performance.now();
+    runInputActive = false;
+    clearPlayerTurboCooldownInterval();
+    return;
+  }
+
+  const resumeAt = performance.now();
+  const pauseDuration = Math.max(0, resumeAt - pauseStartedAt);
+  racePaused = false;
+  pauseStartedAt = 0;
+  if(startTime > 0){
+    startTime += pauseDuration;
+  }
+  shiftPlayerRaceTimestamps(pauseDuration);
+  shiftAiRaceTimestamps(pauseDuration);
+  lastTime = resumeAt;
+  accumulator = 0;
+}
+
 function isHurdlesEvent(){
   return currentEvent === EVENT_HURDLES;
 }
 
-function configureRaceTuning(){
+function applyPlayerRaceTuning(){
+  const nowMs = performance.now();
   const mult = clamp(getSpeedMultiplier(), 0.9, 1.15);
   playerAccelRate = 17.2 * mult;
   playerMaxSpeed = 10.4 * mult;
@@ -335,6 +390,15 @@ function configureRaceTuning(){
     playerMaxSpeed *= SPEED_PERK_MAX_MULT;
   }
   playerTurboCooldownMs = (currentEvent === EVENT_DASH && playerRacePerk === 'turbo') ? FAST_TURBO_COOLDOWN_MS : TURBO_COOLDOWN;
+  if(!isTurboReady && playerTurboCooldownEndsAt > nowMs){
+    playerTurboCooldownEndsAt = Math.min(playerTurboCooldownEndsAt, nowMs + playerTurboCooldownMs);
+    syncPlayerTurboCooldownInterval();
+  }
+}
+
+function configureRaceTuning(){
+  const mult = clamp(getSpeedMultiplier(), 0.9, 1.15);
+  applyPlayerRaceTuning();
 
   cpuAccelRate = 17.2 * mult;
   cpuCruiseSpeed = 1.35 * mult;
@@ -1220,6 +1284,33 @@ function resetRunnerVisualStates(){
   }
 }
 
+function shiftFutureTimestamp(timestamp, deltaMs){
+  return timestamp > 0 ? timestamp + deltaMs : timestamp;
+}
+
+function shiftPlayerRaceTimestamps(deltaMs){
+  playerTurboUntil = shiftFutureTimestamp(playerTurboUntil, deltaMs);
+  playerTurboCooldownEndsAt = shiftFutureTimestamp(playerTurboCooldownEndsAt, deltaMs);
+  playerRunBoostUntil = shiftFutureTimestamp(playerRunBoostUntil, deltaMs);
+  playerJumpUntil = shiftFutureTimestamp(playerJumpUntil, deltaMs);
+  playerHurdleHitUntil = shiftFutureTimestamp(playerHurdleHitUntil, deltaMs);
+  finishCoastUntil = shiftFutureTimestamp(finishCoastUntil, deltaMs);
+  if(!isTurboReady && currentEvent === EVENT_DASH){
+    syncPlayerTurboCooldownInterval();
+  }
+}
+
+function shiftAiRaceTimestamps(deltaMs){
+  for(const ai of aiRunners){
+    ai.turboUntil = shiftFutureTimestamp(ai.turboUntil, deltaMs);
+    ai.runBoostUntil = shiftFutureTimestamp(ai.runBoostUntil, deltaMs);
+    ai.jumpUntil = shiftFutureTimestamp(ai.jumpUntil, deltaMs);
+    ai.hurdleHitUntil = shiftFutureTimestamp(ai.hurdleHitUntil, deltaMs);
+    ai.slipEndTime = shiftFutureTimestamp(ai.slipEndTime, deltaMs);
+    ai.nextTapAt = shiftFutureTimestamp(ai.nextTapAt, deltaMs);
+  }
+}
+
 function isFinishSequenceActive(){
   return playerFinishTimeMs != null && finishCoastUntil > 0;
 }
@@ -1238,6 +1329,7 @@ export function initializeTrackView(){
   randomizeExtraRacerLooks();
   applyTrackTheme(currentTrackThemeKey);
   clearPlayerTurboCooldownInterval();
+  playerTurboCooldownEndsAt = 0;
   bananaUsed = false;
   bananaActive = false;
   bananaPosition = -1;
@@ -1272,6 +1364,7 @@ export function startGame(){
   isTurboReady=true;
   runInputActive=false;
   playerTurboUntil=0;
+  playerTurboCooldownEndsAt=0;
   playerRunBoostUntil=0;
   lastRunTapAt=0;
   playerTapCadence=0;
@@ -1280,6 +1373,8 @@ export function startGame(){
   playerNextHurdleIndex=0;
   playerFinishTimeMs=null;
   finishCoastUntil=0;
+  racePaused=false;
+  pauseStartedAt=0;
   cpuHasStarted=false;
 
   startTime=0;
@@ -1309,6 +1404,12 @@ export function startGame(){
 function gameLoop(){
   if(!isGameRunning||isGameOver) return;
   const now=performance.now();
+  if(racePaused){
+    lastTime = now;
+    accumulator = 0;
+    animationFrameId=requestAnimationFrame(gameLoop);
+    return;
+  }
   const delta=Math.min((now-lastTime)/1000,0.25);
   accumulator+=delta;
   lastTime=now;
@@ -1757,9 +1858,12 @@ export function endGame(winner, playerFinished){
   isGameRunning=false;
   isGameOver=true;
   finishCoastUntil=0;
+  racePaused=false;
+  pauseStartedAt=0;
   runInputActive=false;
   playerRunBoostUntil=0;
   clearPlayerTurboCooldownInterval();
+  playerTurboCooldownEndsAt = 0;
   resetRunnerVisualStates();
   if(animationFrameId){ cancelAnimationFrame(animationFrameId); animationFrameId=0; }
   const ms=(playerFinishTimeMs != null)
@@ -1781,6 +1885,8 @@ export function cancelRace(){
   isGameRunning = false;
   isGameOver = false;
   finishCoastUntil = 0;
+  racePaused = false;
+  pauseStartedAt = 0;
   cpuHasStarted = false;
   runInputActive = false;
   startTime = 0;
@@ -1792,6 +1898,7 @@ export function cancelRace(){
   playerNextHurdleIndex = 0;
   isTurboReady = true;
   clearPlayerTurboCooldownInterval();
+  playerTurboCooldownEndsAt = 0;
   if(animationFrameId){ cancelAnimationFrame(animationFrameId); animationFrameId = 0; }
   initializeTrackView();
 }
@@ -1806,10 +1913,15 @@ function startComputerIfNeeded(){
   }
 }
 
-function startTimerIfNeeded(){ if(!startTime||startTime<=0){ startTime=performance.now(); } }
+function startTimerIfNeeded(){
+  if(!startTime || startTime <= 0){
+    startTime = performance.now();
+    document.dispatchEvent(new CustomEvent('raceStarted'));
+  }
+}
 
 export function onRunPress(){
-  if(isGameOver || isFinishSequenceActive()) return;
+  if(isGameOver || racePaused || isFinishSequenceActive()) return;
   if(!isGameRunning){
     if(window.gameReady===true){ startGame(); }
     else { return; }
@@ -1824,7 +1936,7 @@ export function onRunRelease(){ runInputActive=false; }
 
 export function activateTurbo(){
   if(isHurdlesEvent()) return;
-  if(isGameOver || isFinishSequenceActive()) return;
+  if(isGameOver || racePaused || isFinishSequenceActive()) return;
   if(!isGameRunning){
     if(window.gameReady===true){ startGame(); }
     else { return; }
@@ -1836,28 +1948,20 @@ export function activateTurbo(){
 
   const playerEl=document.getElementById('player');
   if(playerEl) playerEl.classList.add('turbo-effect');
-  playerTurboUntil = performance.now() + TURBO_DURATION;
+  const nowMs = performance.now();
+  playerTurboUntil = nowMs + TURBO_DURATION;
+  playerTurboCooldownEndsAt = nowMs + playerTurboCooldownMs;
   playerSecondWindBoost = clamp(playerSecondWindBoost + TURBO_SECOND_WIND, 0, 1);
-  updateTurboUI(false, Math.floor(playerTurboCooldownMs/1000));
+  updateTurboUI(false, Math.ceil(playerTurboCooldownMs / 1000));
 
   setTimeout(()=>{ const el=document.getElementById('player'); if(el) el.classList.remove('turbo-effect'); }, TURBO_DURATION);
 
-  let cooldownTime=playerTurboCooldownMs/1000;
-  clearPlayerTurboCooldownInterval();
-  playerTurboCooldownIntervalId=setInterval(()=>{
-    cooldownTime--;
-    updateTurboUI(false, Math.max(0,cooldownTime));
-    if(cooldownTime<=0){
-      clearPlayerTurboCooldownInterval();
-      isTurboReady=true;
-      updateTurboUI(true,0);
-    }
-  },1000);
+  syncPlayerTurboCooldownInterval();
 }
 
 export function activateJump(){
   if(!isHurdlesEvent()) return;
-  if(isGameOver || isFinishSequenceActive()) return;
+  if(isGameOver || racePaused || isFinishSequenceActive()) return;
   if(!isGameRunning){
     if(window.gameReady===true){ startGame(); }
     else { return; }
